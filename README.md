@@ -1,2 +1,2 @@
 # feham
-Urdu dictionary Chrome extension
+Urdu to English translation Chrome extension
