@@ -1,0 +1,60 @@
+.urdu-translator-tooltip {
+  position: absolute;
+  z-index: 10000;
+  background: #1f2937;
+  color: white;
+  border-radius: 8px;
+  padding: 0;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  min-width: 200px;
+  max-width: 300px;
+  pointer-events: auto;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.urdu-translator-tooltip .tooltip-content {
+  padding: 12px;
+}
+
+.urdu-translator-tooltip .urdu-word {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fbbf24;
+  margin-bottom: 6px;
+  font-family: 'Noto Nastaliq Urdu', Arial, sans-serif;
+  direction: rtl;
+  text-align: right;
+}
+
+.urdu-translator-tooltip .english-translation {
+  font-size: 14px;
+  color: #e5e7eb;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.urdu-translator-tooltip .tooltip-footer {
+  font-size: 11px;
+  color: #9ca3af;
+  border-top: 1px solid #374151;
+  padding-top: 6px;
+  margin-top: 6px;
+  text-align: center;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Hover effect for tooltip */
+.urdu-translator-tooltip:hover {
+  pointer-events: auto;
+}
