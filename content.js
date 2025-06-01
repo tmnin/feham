@@ -8,6 +8,23 @@ let selectedText = '';
 // Urdu Unicode range regex
 const URDU_REGEX = /[\u0600-\u06FF]+/g;
 
+// Helper function to safely get numeric value
+function safeNumber(value, fallback = 0) {
+  return (typeof value === 'number' && !isNaN(value)) ? value : fallback;
+}
+
+// Helper function to validate rect object
+function isValidRect(rect) {
+  return rect && 
+         typeof rect === 'object' &&
+         typeof rect.left === 'number' && !isNaN(rect.left) &&
+         typeof rect.right === 'number' && !isNaN(rect.right) &&
+         typeof rect.top === 'number' && !isNaN(rect.top) &&
+         typeof rect.bottom === 'number' && !isNaN(rect.bottom) &&
+         typeof rect.width === 'number' && !isNaN(rect.width) &&
+         typeof rect.height === 'number' && !isNaN(rect.height);
+}
+
 // Initialize extension
 if (typeof chrome !== 'undefined' && chrome.storage) {
   chrome.storage.sync.get(['extensionEnabled'], (result) => {
@@ -60,7 +77,7 @@ function handleTextSelection(event) {
   
   setTimeout(() => {
     const selection = window.getSelection();
-    const text = selection.toString().trim();
+    const text = selection ? selection.toString().trim() : '';
     
     console.log('📝 Text selected:', text);
     
@@ -83,13 +100,14 @@ function handleTextSelection(event) {
       try {
         if (selection && selection.rangeCount > 0) {
           const range = selection.getRangeAt(0);
-          if (range) {
+          if (range && typeof range.getBoundingClientRect === 'function') {
             const rect = range.getBoundingClientRect();
-            if (rect && typeof rect.left === 'number' && typeof rect.bottom === 'number') {
+            if (isValidRect(rect)) {
               tooltipPosition = {
                 clientX: rect.left + (rect.width / 2),
                 clientY: rect.bottom + 10
               };
+              console.log('📍 Got selection position from range:', tooltipPosition);
             }
           }
         }
@@ -99,13 +117,21 @@ function handleTextSelection(event) {
       
       // If we couldn't get selection position, use event position or fallback
       if (!tooltipPosition) {
-        tooltipPosition = {
-          clientX: (event && typeof event.clientX === 'number') ? event.clientX : window.innerWidth / 2,
-          clientY: (event && typeof event.clientY === 'number') ? event.clientY + 20 : 100
-        };
+        if (event && typeof event.clientX === 'number' && typeof event.clientY === 'number') {
+          tooltipPosition = {
+            clientX: event.clientX,
+            clientY: event.clientY + 20
+          };
+          console.log('📍 Using event position:', tooltipPosition);
+        } else {
+          tooltipPosition = {
+            clientX: window.innerWidth / 2,
+            clientY: 100
+          };
+          console.log('📍 Using fallback position:', tooltipPosition);
+        }
       }
       
-      console.log('📍 Using tooltip position:', tooltipPosition);
       showTooltip(tooltipPosition, 'Loading translation...');
       translateText(selectedText);
     } else {
@@ -118,7 +144,7 @@ function handleSelectionChange() {
   if (!isExtensionEnabled) return;
   
   const selection = window.getSelection();
-  if (selection.toString().trim() === '') {
+  if (!selection || selection.toString().trim() === '') {
     hideTooltip();
   }
 }
@@ -136,7 +162,10 @@ function handleKeyDown(event) {
   // Hide tooltip on Escape
   if (event.key === 'Escape') {
     hideTooltip();
-    window.getSelection().removeAllRanges();
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+    }
   }
 }
 
@@ -146,14 +175,22 @@ function showTooltip(position, text) {
   // Remove existing tooltip
   hideTooltip();
   
-  // Comprehensive validation of position object
-  if (!position || 
-      typeof position !== 'object' || 
-      typeof position.clientX !== 'number' || 
+  // Comprehensive validation of position object - check if position exists first
+  if (!position || typeof position !== 'object') {
+    console.error('Position object is null or not an object:', position);
+    // Use safe fallback position
+    position = {
+      clientX: window.innerWidth / 2,
+      clientY: 100
+    };
+  }
+  
+  // Now safely check the properties
+  if (typeof position.clientX !== 'number' || 
       typeof position.clientY !== 'number' ||
       isNaN(position.clientX) || 
       isNaN(position.clientY)) {
-    console.error('Invalid position provided to showTooltip:', position);
+    console.error('Invalid position coordinates:', position);
     // Use safe fallback position
     position = {
       clientX: window.innerWidth / 2,
@@ -162,16 +199,16 @@ function showTooltip(position, text) {
   }
   
   // Ensure position values are within reasonable bounds
-  position.clientX = Math.max(0, Math.min(position.clientX, window.innerWidth));
-  position.clientY = Math.max(0, Math.min(position.clientY, window.innerHeight));
+  position.clientX = Math.max(0, Math.min(safeNumber(position.clientX), window.innerWidth));
+  position.clientY = Math.max(0, Math.min(safeNumber(position.clientY), window.innerHeight));
   
   // Create tooltip element
   currentTooltip = document.createElement('div');
   currentTooltip.id = 'urdu-selection-tooltip';
   
   // Apply inline styles for maximum visibility with safe positioning
-  const topPos = Math.round(position.clientY);
-  const leftPos = Math.round(position.clientX);
+  const topPos = Math.round(safeNumber(position.clientY));
+  const leftPos = Math.round(safeNumber(position.clientX));
   
   currentTooltip.style.cssText = `
     position: fixed !important;
@@ -232,21 +269,25 @@ function showTooltip(position, text) {
     try {
       if (currentTooltip && document.body.contains(currentTooltip)) {
         const rect = currentTooltip.getBoundingClientRect();
-        console.log('📏 Tooltip position:', rect);
-        
-        // Adjust horizontal position
-        if (rect.left < 10) {
-          currentTooltip.style.left = '10px';
-          currentTooltip.style.transform = 'none';
-        } else if (rect.right > window.innerWidth - 10) {
-          currentTooltip.style.left = (window.innerWidth - rect.width - 10) + 'px';
-          currentTooltip.style.transform = 'none';
-        }
-        
-        // Adjust vertical position
-        if (rect.bottom > window.innerHeight - 10) {
-          const newTop = Math.max(10, topPos - rect.height - 20);
-          currentTooltip.style.top = newTop + 'px';
+        if (isValidRect(rect)) {
+          console.log('📏 Tooltip position:', rect);
+          
+          // Adjust horizontal position
+          if (rect.left < 10) {
+            currentTooltip.style.left = '10px';
+            currentTooltip.style.transform = 'none';
+          } else if (rect.right > window.innerWidth - 10) {
+            currentTooltip.style.left = (window.innerWidth - rect.width - 10) + 'px';
+            currentTooltip.style.transform = 'none';
+          }
+          
+          // Adjust vertical position
+          if (rect.bottom > window.innerHeight - 10) {
+            const newTop = Math.max(10, topPos - rect.height - 20);
+            currentTooltip.style.top = newTop + 'px';
+          }
+        } else {
+          console.warn('Tooltip rect is invalid, skipping position adjustment');
         }
       }
     } catch (error) {
@@ -258,7 +299,11 @@ function showTooltip(position, text) {
 function hideTooltip() {
   if (currentTooltip) {
     console.log('🗑️ Removing selection tooltip');
-    currentTooltip.remove();
+    try {
+      currentTooltip.remove();
+    } catch (error) {
+      console.error('Error removing tooltip:', error);
+    }
     currentTooltip = null;
     selectedText = '';
   }
@@ -316,18 +361,34 @@ function updateTooltipTranslation(translation) {
 }
 
 function copyToClipboard(text) {
-  navigator.clipboard.writeText(text).then(() => {
-    console.log('📋 Copied to clipboard:', text);
-  }).catch(err => {
-    console.error('Failed to copy:', err);
-    // Fallback for older browsers
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      console.log('📋 Copied to clipboard:', text);
+    }).catch(err => {
+      console.error('Failed to copy:', err);
+      fallbackCopyToClipboard(text);
+    });
+  } else {
+    fallbackCopyToClipboard(text);
+  }
+}
+
+function fallbackCopyToClipboard(text) {
+  try {
     const textArea = document.createElement('textarea');
     textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-999999px';
+    textArea.style.top = '-999999px';
     document.body.appendChild(textArea);
+    textArea.focus();
     textArea.select();
     document.execCommand('copy');
     document.body.removeChild(textArea);
-  });
+    console.log('📋 Fallback copy successful:', text);
+  } catch (err) {
+    console.error('Fallback copy failed:', err);
+  }
 }
 
 function showCopyFeedback() {
@@ -337,7 +398,9 @@ function showCopyFeedback() {
       const originalText = footer.innerHTML;
       footer.innerHTML = '<span style="color: #4ade80;">✓ Copied to clipboard!</span>';
       setTimeout(() => {
-        footer.innerHTML = originalText;
+        if (footer) {
+          footer.innerHTML = originalText;
+        }
       }, 2000);
     }
   }
