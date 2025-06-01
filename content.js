@@ -77,15 +77,36 @@ function handleTextSelection(event) {
       selectedText = text;
       console.log('✅ URDU SELECTION DETECTED:', selectedText);
       
-      // Get selection position for tooltip placement
-      const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
+      // Get selection position for tooltip placement with comprehensive error handling
+      let tooltipPosition = null;
       
-      showTooltip({
-        clientX: rect.left + (rect.width / 2),
-        clientY: rect.bottom + 10
-      }, 'Loading translation...');
+      try {
+        if (selection && selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          if (range) {
+            const rect = range.getBoundingClientRect();
+            if (rect && typeof rect.left === 'number' && typeof rect.bottom === 'number') {
+              tooltipPosition = {
+                clientX: rect.left + (rect.width / 2),
+                clientY: rect.bottom + 10
+              };
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error getting selection position:', error);
+      }
       
+      // If we couldn't get selection position, use event position or fallback
+      if (!tooltipPosition) {
+        tooltipPosition = {
+          clientX: (event && typeof event.clientX === 'number') ? event.clientX : window.innerWidth / 2,
+          clientY: (event && typeof event.clientY === 'number') ? event.clientY + 20 : 100
+        };
+      }
+      
+      console.log('📍 Using tooltip position:', tooltipPosition);
+      showTooltip(tooltipPosition, 'Loading translation...');
       translateText(selectedText);
     } else {
       hideTooltip();
@@ -125,15 +146,37 @@ function showTooltip(position, text) {
   // Remove existing tooltip
   hideTooltip();
   
+  // Comprehensive validation of position object
+  if (!position || 
+      typeof position !== 'object' || 
+      typeof position.clientX !== 'number' || 
+      typeof position.clientY !== 'number' ||
+      isNaN(position.clientX) || 
+      isNaN(position.clientY)) {
+    console.error('Invalid position provided to showTooltip:', position);
+    // Use safe fallback position
+    position = {
+      clientX: window.innerWidth / 2,
+      clientY: 100
+    };
+  }
+  
+  // Ensure position values are within reasonable bounds
+  position.clientX = Math.max(0, Math.min(position.clientX, window.innerWidth));
+  position.clientY = Math.max(0, Math.min(position.clientY, window.innerHeight));
+  
   // Create tooltip element
   currentTooltip = document.createElement('div');
   currentTooltip.id = 'urdu-selection-tooltip';
   
-  // Apply inline styles for maximum visibility
+  // Apply inline styles for maximum visibility with safe positioning
+  const topPos = Math.round(position.clientY);
+  const leftPos = Math.round(position.clientX);
+  
   currentTooltip.style.cssText = `
     position: fixed !important;
-    top: ${position.clientY}px !important;
-    left: ${position.clientX}px !important;
+    top: ${topPos}px !important;
+    left: ${leftPos}px !important;
     transform: translateX(-50%) !important;
     z-index: 2147483647 !important;
     background: #1a1a1a !important;
@@ -184,23 +227,30 @@ function showTooltip(position, text) {
   document.body.appendChild(currentTooltip);
   console.log('✅ Selection tooltip added to DOM');
   
-  // Adjust position if off-screen
+  // Adjust position if off-screen with error handling
   setTimeout(() => {
-    const rect = currentTooltip.getBoundingClientRect();
-    console.log('📏 Tooltip position:', rect);
-    
-    // Adjust horizontal position
-    if (rect.left < 10) {
-      currentTooltip.style.left = '10px';
-      currentTooltip.style.transform = 'none';
-    } else if (rect.right > window.innerWidth - 10) {
-      currentTooltip.style.left = (window.innerWidth - rect.width - 10) + 'px';
-      currentTooltip.style.transform = 'none';
-    }
-    
-    // Adjust vertical position
-    if (rect.bottom > window.innerHeight - 10) {
-      currentTooltip.style.top = (position.clientY - rect.height - 20) + 'px';
+    try {
+      if (currentTooltip && document.body.contains(currentTooltip)) {
+        const rect = currentTooltip.getBoundingClientRect();
+        console.log('📏 Tooltip position:', rect);
+        
+        // Adjust horizontal position
+        if (rect.left < 10) {
+          currentTooltip.style.left = '10px';
+          currentTooltip.style.transform = 'none';
+        } else if (rect.right > window.innerWidth - 10) {
+          currentTooltip.style.left = (window.innerWidth - rect.width - 10) + 'px';
+          currentTooltip.style.transform = 'none';
+        }
+        
+        // Adjust vertical position
+        if (rect.bottom > window.innerHeight - 10) {
+          const newTop = Math.max(10, topPos - rect.height - 20);
+          currentTooltip.style.top = newTop + 'px';
+        }
+      }
+    } catch (error) {
+      console.error('Error adjusting tooltip position:', error);
     }
   }, 50);
 }
