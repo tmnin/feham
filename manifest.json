@@ -2,16 +2,18 @@
   "manifest_version": 3,
   "name": "Urdu Translator",
   "version": "1.0",
-  "description": "Live translation of Urdu text on web pages.",
+  "description": "Hover over Urdu words to see English translations",
   
   "permissions": [
     "activeTab",
     "storage",
-    "clipboardWrite"
+    "clipboardWrite",
+    "scripting"
   ],
   
   "host_permissions": [
-    "https://translate.googleapis.com/*"
+    "https://translate.googleapis.com/*",
+    "https://translate.google.com/*"
   ],
   
   "content_scripts": [

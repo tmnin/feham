@@ -1,18 +1,31 @@
 // Urdu Translator Content Script
+console.log('Urdu Translator content script loaded');
+
 let isExtensionEnabled = true;
 let currentTooltip = null;
 let hoveredWord = '';
 
-// Urdu Unicode range regex
-const URDU_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+/g;
+// Urdu Unicode range regex - simplified and more inclusive
+const URDU_REGEX = /[\u0600-\u06FF]+/g;
 
 // Initialize extension
-chrome.storage.sync.get(['extensionEnabled'], (result) => {
-  isExtensionEnabled = result.extensionEnabled !== false;
-  if (isExtensionEnabled) {
-    setupEventListeners();
-  }
-});
+console.log('Initializing Urdu Translator...');
+
+// Check if chrome.storage is available
+if (typeof chrome !== 'undefined' && chrome.storage) {
+  chrome.storage.sync.get(['extensionEnabled'], (result) => {
+    console.log('Storage result:', result);
+    isExtensionEnabled = result.extensionEnabled !== false;
+    console.log('Extension enabled:', isExtensionEnabled);
+    if (isExtensionEnabled) {
+      setupEventListeners();
+    }
+  });
+} else {
+  console.log('Chrome storage not available, using default settings');
+  isExtensionEnabled = true;
+  setupEventListeners();
+}
 
 // Listen for extension toggle
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -28,33 +41,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 function setupEventListeners() {
+  console.log('Setting up event listeners...');
   document.addEventListener('mouseover', handleMouseOver);
   document.addEventListener('mouseout', handleMouseOut);
   document.addEventListener('keydown', handleKeyDown);
+  console.log('Event listeners added');
 }
 
 function removeEventListeners() {
+  console.log('Removing event listeners...');
   document.removeEventListener('mouseover', handleMouseOver);
   document.removeEventListener('mouseout', handleMouseOut);
   document.removeEventListener('keydown', handleKeyDown);
 }
 
 function handleMouseOver(event) {
+  console.log('Mouse over detected, extension enabled:', isExtensionEnabled);
   if (!isExtensionEnabled) return;
   
   const element = event.target;
   const text = element.textContent || element.innerText;
   
+  console.log('Element text:', text);
+  
   if (!text) return;
   
   // Find Urdu words in the text
   const urduMatches = text.match(URDU_REGEX);
-  if (!urduMatches) return;
+  console.log('Urdu matches found:', urduMatches);
+  
+  // Also test with a simple check
+  const hasUrdu = /[\u0600-\u06FF]/.test(text);
+  console.log('Simple Urdu check:', hasUrdu);
+  
+  if (!urduMatches && !hasUrdu) return;
   
   // Get the word under cursor (simplified approach)
   const word = getWordAtPosition(element, event);
-  if (word && URDU_REGEX.test(word)) {
+  console.log('Word at position:', word);
+  
+  if (word) {
     hoveredWord = word.trim();
+    console.log('Hovering over Urdu word:', hoveredWord);
+    showTooltip(event, 'Loading...');
+    translateWord(hoveredWord);
+  } else if (hasUrdu) {
+    // Fallback: if we detect Urdu but can't extract a specific word
+    hoveredWord = text.trim().substring(0, 20);
+    console.log('Using fallback word:', hoveredWord);
     showTooltip(event, 'Loading...');
     translateWord(hoveredWord);
   }
@@ -78,20 +112,33 @@ function handleKeyDown(event) {
 
 function getWordAtPosition(element, event) {
   // Simplified word extraction - gets the full text content
-  // For more precise word selection, you'd need more complex text analysis
   const text = element.textContent || element.innerText;
+  console.log('Getting word from text:', text);
+  
+  // Split by spaces and find Urdu words
   const words = text.split(/\s+/);
+  console.log('Split words:', words);
   
   // Return the first Urdu word found (simplified)
   for (let word of words) {
     if (URDU_REGEX.test(word)) {
+      console.log('Found Urdu word:', word);
       return word;
     }
   }
+  
+  // If no individual word found, check if entire text contains Urdu
+  if (URDU_REGEX.test(text)) {
+    console.log('Entire text contains Urdu, using first match');
+    const matches = text.match(URDU_REGEX);
+    return matches ? matches[0] : null;
+  }
+  
   return null;
 }
 
 function showTooltip(event, text) {
+  console.log('Showing tooltip with text:', text);
   hideTooltip(); // Remove any existing tooltip
   
   currentTooltip = document.createElement('div');
@@ -105,20 +152,30 @@ function showTooltip(event, text) {
   `;
   
   document.body.appendChild(currentTooltip);
+  console.log('Tooltip added to DOM');
   
-  // Position tooltip
-  const rect = event.target.getBoundingClientRect();
-  currentTooltip.style.left = (rect.left + window.scrollX) + 'px';
-  currentTooltip.style.top = (rect.bottom + window.scrollY + 5) + 'px';
+  // Position tooltip using fixed positioning
+  currentTooltip.style.position = 'fixed';
+  currentTooltip.style.left = (event.clientX + 10) + 'px';
+  currentTooltip.style.top = (event.clientY + 10) + 'px';
+  currentTooltip.style.zIndex = '999999';
+  
+  console.log('Tooltip positioned at:', event.clientX + 10, event.clientY + 10);
   
   // Adjust if tooltip goes off screen
-  const tooltipRect = currentTooltip.getBoundingClientRect();
-  if (tooltipRect.right > window.innerWidth) {
-    currentTooltip.style.left = (window.innerWidth - tooltipRect.width - 10) + 'px';
-  }
-  if (tooltipRect.bottom > window.innerHeight) {
-    currentTooltip.style.top = (rect.top + window.scrollY - tooltipRect.height - 5) + 'px';
-  }
+  setTimeout(() => {
+    const tooltipRect = currentTooltip.getBoundingClientRect();
+    console.log('Tooltip dimensions:', tooltipRect);
+    
+    if (tooltipRect.right > window.innerWidth) {
+      currentTooltip.style.left = (window.innerWidth - tooltipRect.width - 10) + 'px';
+      console.log('Adjusted tooltip left position');
+    }
+    if (tooltipRect.bottom > window.innerHeight) {
+      currentTooltip.style.top = (event.clientY - tooltipRect.height - 10) + 'px';
+      console.log('Adjusted tooltip top position');
+    }
+  }, 10);
 }
 
 function hideTooltip() {
@@ -129,19 +186,36 @@ function hideTooltip() {
 }
 
 function translateWord(word) {
+  console.log('Translating word:', word);
+  console.log('Online status:', navigator.onLine);
+  
   if (!navigator.onLine) {
-    showTooltip(event, 'You are currently offline');
+    if (currentTooltip) {
+      const translationElement = currentTooltip.querySelector('.english-translation');
+      if (translationElement) {
+        translationElement.textContent = 'You are currently offline';
+      }
+    }
     return;
   }
   
-  // Using Google Translate's free API endpoint
+  // Try the direct API first
   const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&q=${encodeURIComponent(word)}`;
+  console.log('Translation URL:', url);
   
   fetch(url)
-    .then(response => response.json())
+    .then(response => {
+      console.log('Translation response status:', response.status);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return response.json();
+    })
     .then(data => {
+      console.log('Translation data:', data);
       try {
         const translation = data[0][0][0];
+        console.log('Extracted translation:', translation);
         if (currentTooltip) {
           const translationElement = currentTooltip.querySelector('.english-translation');
           if (translationElement) {
@@ -150,23 +224,36 @@ function translateWord(word) {
         }
       } catch (error) {
         console.error('Translation parsing error:', error);
-        if (currentTooltip) {
-          const translationElement = currentTooltip.querySelector('.english-translation');
-          if (translationElement) {
-            translationElement.textContent = 'Translation unavailable';
-          }
-        }
+        fallbackTranslation(word);
       }
     })
     .catch(error => {
       console.error('Translation error:', error);
-      if (currentTooltip) {
-        const translationElement = currentTooltip.querySelector('.english-translation');
-        if (translationElement) {
-          translationElement.textContent = 'Translation failed';
-        }
-      }
+      fallbackTranslation(word);
     });
+}
+
+function fallbackTranslation(word) {
+  console.log('Using fallback translation for:', word);
+  // Send to background script for translation
+  chrome.runtime.sendMessage({
+    action: 'translate',
+    word: word,
+    from: 'ur',
+    to: 'en'
+  }, (response) => {
+    if (response && response.translation && currentTooltip) {
+      const translationElement = currentTooltip.querySelector('.english-translation');
+      if (translationElement) {
+        translationElement.textContent = response.translation;
+      }
+    } else if (currentTooltip) {
+      const translationElement = currentTooltip.querySelector('.english-translation');
+      if (translationElement) {
+        translationElement.textContent = 'Translation failed - try a different word';
+      }
+    }
+  });
 }
 
 function copyToClipboard(text) {
