@@ -404,29 +404,28 @@ function showTooltip(position, word, definition) {
     left: ${leftPos}px !important;
     transform: translateX(-50%) !important;
     z-index: 2147483647 !important;
-    background: linear-gradient(135deg, #1f2937 0%, #111827 100%) !important;
-    color: white !important;
-    border: 2px solid #fbbf24 !important;
-    border-radius: 12px !important;
-    padding: 16px !important;
+    background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%) !important;
+    color: #1e293b !important;
+    border: 2px solid #f59e0b !important;
+    border-radius: 10px !important;
+    padding: 12px 14px !important;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif !important;
-    font-size: 14px !important;
-    min-width: 250px !important;
-    max-width: 400px !important;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(251, 191, 36, 0.1) inset !important;
+    font-size: 13px !important;
+    min-width: 180px !important;
+    max-width: 280px !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(245, 158, 11, 0.1) inset !important;
     pointer-events: none !important;
     display: block !important;
     visibility: visible !important;
     opacity: 1 !important;
-    animation: tooltipFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
-    backdrop-filter: blur(10px) !important;
+    animation: tooltipFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
   `;
   
   currentTooltip.innerHTML = `
-    <div style="color: #fbbf24; font-weight: 600; margin-bottom: 12px; font-size: 26px; direction: rtl; text-align: right; letter-spacing: 0.5px; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Alvi Nastaleeq', serif !important; line-height: 2.2;">${word}</div>
-    <div style="color: #e5e7eb; margin-bottom: 8px; line-height: 1.6; font-size: 13px;" id="definition-text">${definition}</div>
-    <div id="urdu-meaning-text" style="color: #a7f3d0; margin-bottom: 8px; line-height: 2; font-size: 16px; direction: rtl; text-align: right; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Alvi Nastaleeq', serif !important; display: none; border-top: 1px solid rgba(55, 65, 81, 0.4); padding-top: 8px; margin-top: 8px;"></div>
-    <div style="color: #9ca3af; font-size: 10px; border-top: 1px solid rgba(55, 65, 81, 0.6); padding-top: 6px; text-align: center; font-weight: 500;">
+    <div style="color: #d97706; font-weight: 600; margin-bottom: 8px; font-size: 20px; direction: rtl; text-align: right; letter-spacing: 0.3px; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; line-height: 1.8;">${word}</div>
+    <div style="color: #475569; margin-bottom: 6px; line-height: 1.5; font-size: 12px;" id="definition-text">${definition}</div>
+    <div id="urdu-meaning-text" style="color: #059669; margin-bottom: 6px; line-height: 1.7; font-size: 13px; direction: rtl; text-align: right; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; display: none; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-top: 6px;"></div>
+    <div style="color: #94a3b8; font-size: 9px; border-top: 1px solid #e2e8f0; padding-top: 5px; text-align: center; font-weight: 500;">
       Press 'C' to copy • ESC to close
     </div>
   `;
@@ -448,7 +447,7 @@ function showTooltip(position, word, definition) {
       @keyframes tooltipFadeIn {
         from { 
           opacity: 0; 
-          transform: translateX(-50%) translateY(-8px) scale(0.96); 
+          transform: translateX(-50%) translateY(-6px) scale(0.97); 
         }
         to { 
           opacity: 1; 
