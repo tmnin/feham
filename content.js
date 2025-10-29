@@ -493,26 +493,26 @@ function lookupWord(word) {
   console.log('📖 Looking up word:', word);
   isProcessing = true;
   
-  // First try Rekhta Dictionary API
-  lookupRekhta(word)
+  // First try Platts Dictionary (comprehensive classical dictionary)
+  lookupPlatts(word)
     .then(definition => {
       if (definition) {
         updateTooltipDefinition(definition);
         isProcessing = false;
       } else {
-        // Fallback to Google Translate if Rekhta doesn't have it
-        console.log('Word not found in Rekhta, falling back to Google Translate');
+        // Fallback to Google Translate if Platts doesn't have it
+        console.log('Word not found in Platts, falling back to Google Translate');
         translateWord(word);
       }
     })
     .catch(error => {
-      console.error('Rekhta lookup error:', error);
+      console.error('Platts lookup error:', error);
       // Fallback to Google Translate on error
       translateWord(word);
     });
 }
 
-async function lookupRekhta(word) {
+async function lookupPlatts(word) {
   if (!navigator.onLine) {
     updateTooltipDefinition('⚠️ You are currently offline');
     isProcessing = false;
@@ -520,50 +520,68 @@ async function lookupRekhta(word) {
   }
   
   try {
-    const url = `https://rekhtadictionaryapi.azurewebsites.net/api/RekhtaDictionaryResponse?word=${encodeURIComponent(word)}`;
+    // Platts Dictionary query URL
+    const url = `https://dsal.uchicago.edu/cgi-bin/app/platts_query.py?qs=${encodeURIComponent(word)}&searchhws=yes`;
     
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-      }
+      mode: 'cors'
     });
     
     if (!response.ok) {
-      console.log('Rekhta API response not OK:', response.status);
+      console.log('Platts API response not OK:', response.status);
       return null;
     }
     
-    const data = await response.json();
+    const html = await response.text();
     
-    // Parse Rekhta response
-    // The API returns meanings in English, Hindi, and Urdu
-    if (data && data.en && data.en.length > 0) {
-      // Extract English meanings
-      const meanings = data.en
-        .filter(item => item && item.trim().length > 0)
-        .join(', ');
-      
-      if (meanings) {
-        // Format: Show English meaning (cleaner format)
-        return `${meanings}`;
+    // Parse the HTML response
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    
+    // Look for the definition in the response
+    // Platts returns results in a specific format - we need to extract the meaning
+    const resultDivs = doc.querySelectorAll('div.hw');
+    
+    if (resultDivs.length === 0) {
+      // Try alternative selectors
+      const results = doc.querySelectorAll('p, div');
+      for (const result of results) {
+        const text = result.textContent.trim();
+        if (text && text.length > 10 && !text.includes('Search') && !text.includes('query')) {
+          // Found a potential definition
+          const cleanText = text.replace(/\s+/g, ' ').substring(0, 300);
+          if (cleanText.length > 0) {
+            return cleanText + (text.length > 300 ? '...' : '');
+          }
+        }
       }
+      return null;
     }
     
-    // If no English meaning, try Hindi transliteration
-    if (data && data.hi && data.hi.length > 0) {
-      const hindiMeanings = data.hi
-        .filter(item => item && item.trim().length > 0)
-        .join(', ');
-      
-      if (hindiMeanings) {
-        return `${hindiMeanings}`;
-      }
+    // Extract the first definition
+    let definition = '';
+    const firstResult = resultDivs[0];
+    
+    // Get the definition text (usually in the next sibling or within the div)
+    const defElement = firstResult.nextElementSibling || firstResult;
+    definition = defElement.textContent.trim();
+    
+    // Clean up the definition
+    definition = definition
+      .replace(/\s+/g, ' ')
+      .replace(/^\d+\.\s*/, '') // Remove leading numbers
+      .trim();
+    
+    // Limit length for tooltip
+    if (definition.length > 300) {
+      definition = definition.substring(0, 300) + '...';
     }
     
-    return null;
+    return definition || null;
+    
   } catch (error) {
-    console.error('Error fetching from Rekhta:', error);
+    console.error('Error fetching from Platts:', error);
     return null;
   }
 }
@@ -594,7 +612,7 @@ function translateWord(word) {
       }
       
       if (translation && translation.trim()) {
-        updateTooltipDefinition(`${translation.trim()} (Google Translate)`);
+        updateTooltipDefinition(translation.trim());
       } else {
         updateTooltipDefinition('Translation not available');
       }
