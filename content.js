@@ -115,10 +115,6 @@ function processHover(event) {
 
 function getWordAtPoint(x, y) {
   let range = null;
-  let element = null;
-  
-  // Get the element at the point first
-  element = document.elementFromPoint(x, y);
   
   // Try different methods to get text at point
   if (document.caretRangeFromPoint) {
@@ -138,67 +134,87 @@ function getWordAtPoint(x, y) {
   
   // Handle different node types
   let textNode = range.startContainer;
-  let text = '';
   let clickOffset = range.startOffset;
   
-  // If we're in an element node, try to find text within it
+  // If we're in an element node, we need to find the actual text node
   if (textNode.nodeType === Node.ELEMENT_NODE) {
-    // For links and other elements, get all text content
+    // Get the element under cursor
+    const element = document.elementFromPoint(x, y);
+    if (!element) return null;
+    
+    // Find all text nodes in this element
+    const textNodes = [];
     const walker = document.createTreeWalker(
-      textNode,
+      element,
       NodeFilter.SHOW_TEXT,
-      null,
+      {
+        acceptNode: function(node) {
+          // Only accept text nodes with actual content
+          if (node.textContent.trim().length > 0) {
+            return NodeFilter.FILTER_ACCEPT;
+          }
+          return NodeFilter.FILTER_REJECT;
+        }
+      },
       false
     );
     
-    let currentNode;
-    let bestNode = null;
-    let bestDistance = Infinity;
-    
-    // Find the closest text node to the cursor
-    while (currentNode = walker.nextNode()) {
-      const nodeRange = document.createRange();
-      nodeRange.selectNodeContents(currentNode);
-      const rect = nodeRange.getBoundingClientRect();
-      
-      // Calculate distance from cursor to this text node
-      const distance = Math.sqrt(
-        Math.pow(rect.left + rect.width / 2 - x, 2) +
-        Math.pow(rect.top + rect.height / 2 - y, 2)
-      );
-      
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestNode = currentNode;
-      }
+    let node;
+    while (node = walker.nextNode()) {
+      textNodes.push(node);
     }
     
-    if (bestNode) {
-      textNode = bestNode;
-      text = textNode.textContent;
+    if (textNodes.length === 0) return null;
+    
+    // Find which text node the cursor is actually over
+    let foundNode = null;
+    let foundOffset = 0;
+    
+    for (const node of textNodes) {
+      const nodeRange = document.createRange();
+      nodeRange.selectNodeContents(node);
+      const rects = nodeRange.getClientRects();
       
-      // Try to get a better offset within this text node
-      const textRange = document.createRange();
-      textRange.selectNodeContents(textNode);
-      clickOffset = 0;
-      
-      // Estimate offset based on cursor position
-      const textRect = textRange.getBoundingClientRect();
-      if (textRect.width > 0 && text.length > 0) {
-        // For RTL text (Urdu), calculate from right
-        const relativeX = textRect.right - x;
-        const charWidth = textRect.width / text.length;
-        clickOffset = Math.floor(relativeX / charWidth);
-        clickOffset = Math.max(0, Math.min(clickOffset, text.length));
+      // Check if cursor is within any of this node's rectangles
+      for (let i = 0; i < rects.length; i++) {
+        const rect = rects[i];
+        if (x >= rect.left && x <= rect.right &&
+            y >= rect.top && y <= rect.bottom) {
+          foundNode = node;
+          
+          // Calculate offset within this text node
+          const text = node.textContent;
+          const nodeRect = rect;
+          
+          // For RTL text (Urdu), calculate from right to left
+          if (nodeRect.width > 0 && text.length > 0) {
+            const relativeX = x - nodeRect.left;
+            const charWidth = nodeRect.width / text.length;
+            foundOffset = Math.floor(relativeX / charWidth);
+            foundOffset = Math.max(0, Math.min(foundOffset, text.length));
+          }
+          
+          break;
+        }
       }
-    } else {
+      
+      if (foundNode) break;
+    }
+    
+    if (!foundNode) {
       return null;
     }
-  } else if (textNode.nodeType === Node.TEXT_NODE) {
-    text = textNode.textContent;
-  } else {
+    
+    textNode = foundNode;
+    clickOffset = foundOffset;
+  }
+  
+  // Now we should have a text node
+  if (textNode.nodeType !== Node.TEXT_NODE) {
     return null;
   }
+  
+  const text = textNode.textContent;
   
   // Check if we're actually over text (not whitespace)
   if (!text || text.trim().length === 0) {
@@ -570,7 +586,7 @@ function showCopyFeedback() {
     const footer = currentTooltip.querySelector('div:last-child');
     if (footer) {
       const originalText = footer.innerHTML;
-      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">Copied</span>';
+      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">✓ Copied!</span>';
       setTimeout(() => {
         if (footer && currentTooltip) {
           footer.innerHTML = originalText;
