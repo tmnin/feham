@@ -78,7 +78,7 @@ function processHover(event) {
   
   const wordData = getWordAtPoint(event.clientX, event.clientY);
   
-  if (!wordData || !wordData.word) {
+  if (!wordData || !wordData.word || !wordData.isOverText) {
     hideTooltip();
     removeHighlight();
     currentWord = '';
@@ -115,6 +115,10 @@ function processHover(event) {
 
 function getWordAtPoint(x, y) {
   let range = null;
+  let element = null;
+  
+  // Get the element at the point first
+  element = document.elementFromPoint(x, y);
   
   // Try different methods to get text at point
   if (document.caretRangeFromPoint) {
@@ -128,17 +132,88 @@ function getWordAtPoint(x, y) {
     }
   }
   
-  if (!range || !range.startContainer || range.startContainer.nodeType !== Node.TEXT_NODE) {
+  if (!range || !range.startContainer) {
     return null;
   }
   
-  const textNode = range.startContainer;
-  const text = textNode.textContent;
-  const clickOffset = range.startOffset;
+  // Handle different node types
+  let textNode = range.startContainer;
+  let text = '';
+  let clickOffset = range.startOffset;
   
-  // If clicked on a space or empty area, return null
+  // If we're in an element node, try to find text within it
+  if (textNode.nodeType === Node.ELEMENT_NODE) {
+    // For links and other elements, get all text content
+    const walker = document.createTreeWalker(
+      textNode,
+      NodeFilter.SHOW_TEXT,
+      null,
+      false
+    );
+    
+    let currentNode;
+    let bestNode = null;
+    let bestDistance = Infinity;
+    
+    // Find the closest text node to the cursor
+    while (currentNode = walker.nextNode()) {
+      const nodeRange = document.createRange();
+      nodeRange.selectNodeContents(currentNode);
+      const rect = nodeRange.getBoundingClientRect();
+      
+      // Calculate distance from cursor to this text node
+      const distance = Math.sqrt(
+        Math.pow(rect.left + rect.width / 2 - x, 2) +
+        Math.pow(rect.top + rect.height / 2 - y, 2)
+      );
+      
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestNode = currentNode;
+      }
+    }
+    
+    if (bestNode) {
+      textNode = bestNode;
+      text = textNode.textContent;
+      
+      // Try to get a better offset within this text node
+      const textRange = document.createRange();
+      textRange.selectNodeContents(textNode);
+      clickOffset = 0;
+      
+      // Estimate offset based on cursor position
+      const textRect = textRange.getBoundingClientRect();
+      if (textRect.width > 0 && text.length > 0) {
+        // For RTL text (Urdu), calculate from right
+        const relativeX = textRect.right - x;
+        const charWidth = textRect.width / text.length;
+        clickOffset = Math.floor(relativeX / charWidth);
+        clickOffset = Math.max(0, Math.min(clickOffset, text.length));
+      }
+    } else {
+      return null;
+    }
+  } else if (textNode.nodeType === Node.TEXT_NODE) {
+    text = textNode.textContent;
+  } else {
+    return null;
+  }
+  
+  // Check if we're actually over text (not whitespace)
   if (!text || text.trim().length === 0) {
     return null;
+  }
+  
+  // Check if the exact character at cursor position is whitespace
+  if (clickOffset < text.length) {
+    const charAtCursor = text.charAt(clickOffset);
+    const charBefore = clickOffset > 0 ? text.charAt(clickOffset - 1) : '';
+    
+    // If both the character at cursor and before are whitespace, we're in empty space
+    if (/\s/.test(charAtCursor) && /\s/.test(charBefore)) {
+      return null;
+    }
   }
   
   // Word boundary regex - includes spaces, punctuation, and Urdu punctuation
@@ -156,15 +231,12 @@ function getWordAtPoint(x, y) {
     end++;
   }
   
-  // Handle edge case: if we're at the end of a word, search from the character before
-  if (start === end && clickOffset > 0) {
+  // Handle edge case: if we're exactly on a boundary, try the word before
+  if (start === end && clickOffset > 0 && !wordBoundary.test(text.charAt(clickOffset - 1))) {
+    end = clickOffset;
     start = clickOffset - 1;
     while (start > 0 && !wordBoundary.test(text.charAt(start - 1))) {
       start--;
-    }
-    end = clickOffset;
-    while (end < text.length && !wordBoundary.test(text.charAt(end))) {
-      end++;
     }
   }
   
@@ -174,20 +246,36 @@ function getWordAtPoint(x, y) {
     return null;
   }
   
-  // Create a range for highlighting
-  const wordRange = document.createRange();
+  // Verify we're actually over the word by checking bounding boxes
+  let isOverText = false;
   try {
+    const wordRange = document.createRange();
     wordRange.setStart(textNode, start);
     wordRange.setEnd(textNode, end);
+    
+    const rects = wordRange.getClientRects();
+    for (let i = 0; i < rects.length; i++) {
+      const rect = rects[i];
+      if (x >= rect.left - 5 && x <= rect.right + 5 &&
+          y >= rect.top - 5 && y <= rect.bottom + 5) {
+        isOverText = true;
+        break;
+      }
+    }
+    
+    if (!isOverText) {
+      return null;
+    }
+    
+    return {
+      word: word,
+      range: wordRange,
+      isOverText: true
+    };
   } catch (error) {
     console.error('Error creating word range:', error);
     return null;
   }
-  
-  return {
-    word: word,
-    range: wordRange
-  };
 }
 
 function highlightWord(range) {
@@ -482,7 +570,7 @@ function showCopyFeedback() {
     const footer = currentTooltip.querySelector('div:last-child');
     if (footer) {
       const originalText = footer.innerHTML;
-      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">✓ Copied!</span>';
+      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">Copied</span>';
       setTimeout(() => {
         if (footer && currentTooltip) {
           footer.innerHTML = originalText;
