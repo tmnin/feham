@@ -15,7 +15,9 @@
     "https://translate.googleapis.com/*",
     "https://translate.google.com/*",
     "https://udb.gov.pk/*",
-    "http://udb.gov.pk/*"
+    "http://udb.gov.pk/*",
+    "https://fonts.googleapis.com/*",
+    "https://fonts.gstatic.com/*"
   ],
   
   "content_scripts": [

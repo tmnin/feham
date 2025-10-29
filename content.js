@@ -411,8 +411,8 @@ function showTooltip(position, word, definition) {
     padding: 16px !important;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif !important;
     font-size: 14px !important;
-    min-width: 200px !important;
-    max-width: 350px !important;
+    min-width: 250px !important;
+    max-width: 400px !important;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(251, 191, 36, 0.1) inset !important;
     pointer-events: none !important;
     display: block !important;
@@ -423,18 +423,21 @@ function showTooltip(position, word, definition) {
   `;
   
   currentTooltip.innerHTML = `
-    <div style="color: #fbbf24; font-weight: 600; margin-bottom: 8px; font-size: 18px; direction: rtl; text-align: right; letter-spacing: 0.3px;">${word}</div>
+    <div style="color: #fbbf24; font-weight: 600; margin-bottom: 12px; font-size: 24px; direction: rtl; text-align: right; letter-spacing: 0.5px; font-family: 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Alvi Nastaleeq', 'Pak Nastaleeq', 'Nafees Nastaleeq', serif !important; line-height: 2;">${word}</div>
     <div style="color: #e5e7eb; margin-bottom: 8px; line-height: 1.6; font-size: 13px;" id="definition-text">${definition}</div>
+    <div id="urdu-meaning-text" style="color: #a7f3d0; margin-bottom: 8px; line-height: 1.8; font-size: 15px; direction: rtl; text-align: right; font-family: 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Alvi Nastaleeq', 'Pak Nastaleeq', 'Nafees Nastaleeq', serif !important; display: none; border-top: 1px solid rgba(55, 65, 81, 0.4); padding-top: 8px; margin-top: 8px;"></div>
     <div style="color: #9ca3af; font-size: 10px; border-top: 1px solid rgba(55, 65, 81, 0.6); padding-top: 6px; text-align: center; font-weight: 500;">
       Press 'C' to copy • ESC to close
     </div>
   `;
   
-  // Add animation styles
+  // Add animation styles and Nastaliq font
   if (!document.getElementById('urdu-dictionary-styles')) {
     const styleSheet = document.createElement('style');
     styleSheet.id = 'urdu-dictionary-styles';
     styleSheet.textContent = `
+      @import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
+      
       @keyframes tooltipFadeIn {
         from { 
           opacity: 0; 
@@ -493,21 +496,76 @@ function lookupWord(word) {
   console.log('📖 Looking up word:', word);
   isProcessing = true;
   
-  // Try Pakistan Urdu Dictionary Board (UDB) first
+  // Try Pakistan Urdu Dictionary Board (UDB) first for English definition
   lookupUDB(word)
     .then(definition => {
       if (definition) {
         updateTooltipDefinition(definition);
+        // Also get Urdu meaning from Google Translate
+        getUrduMeaning(word);
         isProcessing = false;
       } else {
         console.log('Word not found in UDB, falling back to Google Translate');
         translateWord(word);
+        // Still try to get Urdu meaning
+        getUrduMeaning(word);
       }
     })
     .catch(error => {
       console.error('UDB lookup error:', error);
       translateWord(word);
+      getUrduMeaning(word);
     });
+}
+
+async function getUrduMeaning(word) {
+  // Get Urdu to Urdu meaning/explanation using Google Translate
+  // This will give us an Urdu explanation of the word
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=ur&dt=t&q=${encodeURIComponent(word)}`;
+    
+    const response = await fetch(url);
+    if (!response.ok) return;
+    
+    const data = await response.json();
+    
+    // Try to get a meaningful Urdu explanation
+    // Note: Urdu-to-Urdu might just return the same word, so we'll also try getting definition
+    let urduMeaning = '';
+    
+    // Alternative: Use English-to-Urdu for the English meaning we found
+    if (currentTooltip) {
+      const definitionElement = currentTooltip.querySelector('#definition-text');
+      if (definitionElement && definitionElement.textContent !== 'Looking up...') {
+        const englishDef = definitionElement.textContent.substring(0, 100); // First 100 chars
+        
+        // Translate the English definition to Urdu
+        const urduUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ur&dt=t&q=${encodeURIComponent(englishDef)}`;
+        
+        const urduResponse = await fetch(urduUrl);
+        if (urduResponse.ok) {
+          const urduData = await urduResponse.json();
+          if (urduData && urduData[0] && Array.isArray(urduData[0])) {
+            urduMeaning = urduData[0]
+              .filter(item => item && item[0])
+              .map(item => item[0])
+              .join('');
+          }
+        }
+      }
+    }
+    
+    // Update tooltip with Urdu meaning
+    if (urduMeaning && currentTooltip) {
+      const urduElement = currentTooltip.querySelector('#urdu-meaning-text');
+      if (urduElement) {
+        urduElement.textContent = urduMeaning;
+        urduElement.style.display = 'block';
+      }
+    }
+  } catch (error) {
+    console.error('Error getting Urdu meaning:', error);
+  }
 }
 
 async function lookupUDB(word) {
