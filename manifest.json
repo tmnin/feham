@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Urdu Translator",
   "version": "1.0",
-  "description": "Hover over Urdu words to see English translations",
+  "description": "Hover over Urdu words to see English translations from Rekhta Dictionary",
   
   "permissions": [
     "activeTab",
@@ -13,7 +13,8 @@
   
   "host_permissions": [
     "https://translate.googleapis.com/*",
-    "https://translate.google.com/*"
+    "https://translate.google.com/*",
+    "https://rekhtadictionaryapi.azurewebsites.net/*"
   ],
   
   "content_scripts": [

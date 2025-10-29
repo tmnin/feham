@@ -493,8 +493,79 @@ function lookupWord(word) {
   console.log('📖 Looking up word:', word);
   isProcessing = true;
   
-  // Directly call translation
-  translateWord(word);
+  // First try Rekhta Dictionary API
+  lookupRekhta(word)
+    .then(definition => {
+      if (definition) {
+        updateTooltipDefinition(definition);
+        isProcessing = false;
+      } else {
+        // Fallback to Google Translate if Rekhta doesn't have it
+        console.log('Word not found in Rekhta, falling back to Google Translate');
+        translateWord(word);
+      }
+    })
+    .catch(error => {
+      console.error('Rekhta lookup error:', error);
+      // Fallback to Google Translate on error
+      translateWord(word);
+    });
+}
+
+async function lookupRekhta(word) {
+  if (!navigator.onLine) {
+    updateTooltipDefinition('⚠️ You are currently offline');
+    isProcessing = false;
+    return null;
+  }
+  
+  try {
+    const url = `https://rekhtadictionaryapi.azurewebsites.net/api/RekhtaDictionaryResponse?word=${encodeURIComponent(word)}`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      }
+    });
+    
+    if (!response.ok) {
+      console.log('Rekhta API response not OK:', response.status);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    // Parse Rekhta response
+    // The API returns meanings in English, Hindi, and Urdu
+    if (data && data.en && data.en.length > 0) {
+      // Extract English meanings
+      const meanings = data.en
+        .filter(item => item && item.trim().length > 0)
+        .join(', ');
+      
+      if (meanings) {
+        // Format: Show English meaning (cleaner format)
+        return `${meanings}`;
+      }
+    }
+    
+    // If no English meaning, try Hindi transliteration
+    if (data && data.hi && data.hi.length > 0) {
+      const hindiMeanings = data.hi
+        .filter(item => item && item.trim().length > 0)
+        .join(', ');
+      
+      if (hindiMeanings) {
+        return `${hindiMeanings}`;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error fetching from Rekhta:', error);
+    return null;
+  }
 }
 
 function translateWord(word) {
@@ -523,7 +594,7 @@ function translateWord(word) {
       }
       
       if (translation && translation.trim()) {
-        updateTooltipDefinition(translation.trim());
+        updateTooltipDefinition(`${translation.trim()} (Google Translate)`);
       } else {
         updateTooltipDefinition('Translation not available');
       }
