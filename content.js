@@ -493,26 +493,24 @@ function lookupWord(word) {
   console.log('📖 Looking up word:', word);
   isProcessing = true;
   
-  // First try Platts Dictionary (comprehensive classical dictionary)
-  lookupPlatts(word)
+  // Try Pakistan Urdu Dictionary Board (UDB) first
+  lookupUDB(word)
     .then(definition => {
       if (definition) {
         updateTooltipDefinition(definition);
         isProcessing = false;
       } else {
-        // Fallback to Google Translate if Platts doesn't have it
-        console.log('Word not found in Platts, falling back to Google Translate');
+        console.log('Word not found in UDB, falling back to Google Translate');
         translateWord(word);
       }
     })
     .catch(error => {
-      console.error('Platts lookup error:', error);
-      // Fallback to Google Translate on error
+      console.error('UDB lookup error:', error);
       translateWord(word);
     });
 }
 
-async function lookupPlatts(word) {
+async function lookupUDB(word) {
   if (!navigator.onLine) {
     updateTooltipDefinition('⚠️ You are currently offline');
     isProcessing = false;
@@ -520,8 +518,8 @@ async function lookupPlatts(word) {
   }
   
   try {
-    // Platts Dictionary query URL
-    const url = `https://dsal.uchicago.edu/cgi-bin/app/platts_query.py?qs=${encodeURIComponent(word)}&searchhws=yes`;
+    // Pakistan Urdu Dictionary Board search URL
+    const url = `https://udb.gov.pk/result.php?search=${encodeURIComponent(word)}`;
     
     const response = await fetch(url, {
       method: 'GET',
@@ -529,7 +527,7 @@ async function lookupPlatts(word) {
     });
     
     if (!response.ok) {
-      console.log('Platts API response not OK:', response.status);
+      console.log('UDB response not OK:', response.status);
       return null;
     }
     
@@ -539,49 +537,88 @@ async function lookupPlatts(word) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
     
-    // Look for the definition in the response
-    // Platts returns results in a specific format - we need to extract the meaning
-    const resultDivs = doc.querySelectorAll('div.hw');
+    // Look for definition in the page
+    // UDB returns results in a table or div format
     
-    if (resultDivs.length === 0) {
-      // Try alternative selectors
-      const results = doc.querySelectorAll('p, div');
-      for (const result of results) {
-        const text = result.textContent.trim();
-        if (text && text.length > 10 && !text.includes('Search') && !text.includes('query')) {
-          // Found a potential definition
-          const cleanText = text.replace(/\s+/g, ' ').substring(0, 300);
-          if (cleanText.length > 0) {
-            return cleanText + (text.length > 300 ? '...' : '');
-          }
+    // Try multiple selectors to find the definition
+    let definition = '';
+    
+    // Method 1: Look for specific result containers
+    const resultContainers = doc.querySelectorAll('.result, .definition, .meaning, table tr td');
+    
+    for (const container of resultContainers) {
+      const text = container.textContent.trim();
+      // Filter out navigation, headers, and short text
+      if (text.length > 15 && 
+          !text.includes('تلاش') && 
+          !text.includes('مفصل تلاش') &&
+          !text.includes('Search') &&
+          !text.includes('Copyright')) {
+        
+        // Clean up the text
+        definition = text
+          .replace(/\s+/g, ' ')
+          .replace(/\n+/g, ' ')
+          .trim();
+        
+        // If we found something meaningful, break
+        if (definition.length > 20) {
+          break;
         }
       }
-      return null;
     }
     
-    // Extract the first definition
-    let definition = '';
-    const firstResult = resultDivs[0];
+    // Method 2: If no definition found, try all paragraphs and divs
+    if (!definition || definition.length < 20) {
+      const allText = doc.querySelectorAll('p, div');
+      
+      for (const elem of allText) {
+        const text = elem.textContent.trim();
+        
+        // Look for text that contains the word and looks like a definition
+        if (text.includes(word) && text.length > 30 && text.length < 500) {
+          definition = text
+            .replace(/\s+/g, ' ')
+            .trim();
+          break;
+        }
+      }
+    }
     
-    // Get the definition text (usually in the next sibling or within the div)
-    const defElement = firstResult.nextElementSibling || firstResult;
-    definition = defElement.textContent.trim();
-    
-    // Clean up the definition
-    definition = definition
-      .replace(/\s+/g, ' ')
-      .replace(/^\d+\.\s*/, '') // Remove leading numbers
-      .trim();
+    // Method 3: Extract any meaningful text from the page body
+    if (!definition || definition.length < 20) {
+      const bodyText = doc.body ? doc.body.textContent : '';
+      const lines = bodyText.split('\n').filter(line => {
+        const trimmed = line.trim();
+        return trimmed.length > 30 && 
+               trimmed.length < 500 &&
+               !trimmed.includes('Copyright') &&
+               !trimmed.includes('تلاش');
+      });
+      
+      if (lines.length > 0) {
+        definition = lines[0].replace(/\s+/g, ' ').trim();
+      }
+    }
     
     // Limit length for tooltip
-    if (definition.length > 300) {
-      definition = definition.substring(0, 300) + '...';
+    if (definition && definition.length > 0) {
+      if (definition.length > 400) {
+        definition = definition.substring(0, 400) + '...';
+      }
+      
+      // Check if it's a valid definition (not just error messages)
+      if (!definition.includes('not found') && 
+          !definition.includes('نتیجہ نہیں') &&
+          definition.length > 15) {
+        return definition;
+      }
     }
     
-    return definition || null;
+    return null;
     
   } catch (error) {
-    console.error('Error fetching from Platts:', error);
+    console.error('Error fetching from UDB:', error);
     return null;
   }
 }
