@@ -423,9 +423,9 @@ function showTooltip(position, word, definition) {
   `;
   
   currentTooltip.innerHTML = `
-    <div style="color: #fbbf24; font-weight: 600; margin-bottom: 12px; font-size: 24px; direction: rtl; text-align: right; letter-spacing: 0.5px; font-family: 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Alvi Nastaleeq', 'Pak Nastaleeq', 'Nafees Nastaleeq', serif !important; line-height: 2;">${word}</div>
+    <div style="color: #fbbf24; font-weight: 600; margin-bottom: 12px; font-size: 26px; direction: rtl; text-align: right; letter-spacing: 0.5px; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Alvi Nastaleeq', serif !important; line-height: 2.2;">${word}</div>
     <div style="color: #e5e7eb; margin-bottom: 8px; line-height: 1.6; font-size: 13px;" id="definition-text">${definition}</div>
-    <div id="urdu-meaning-text" style="color: #a7f3d0; margin-bottom: 8px; line-height: 1.8; font-size: 15px; direction: rtl; text-align: right; font-family: 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Alvi Nastaleeq', 'Pak Nastaleeq', 'Nafees Nastaleeq', serif !important; display: none; border-top: 1px solid rgba(55, 65, 81, 0.4); padding-top: 8px; margin-top: 8px;"></div>
+    <div id="urdu-meaning-text" style="color: #a7f3d0; margin-bottom: 8px; line-height: 2; font-size: 16px; direction: rtl; text-align: right; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', 'Alvi Nastaleeq', serif !important; display: none; border-top: 1px solid rgba(55, 65, 81, 0.4); padding-top: 8px; margin-top: 8px;"></div>
     <div style="color: #9ca3af; font-size: 10px; border-top: 1px solid rgba(55, 65, 81, 0.6); padding-top: 6px; text-align: center; font-weight: 500;">
       Press 'C' to copy • ESC to close
     </div>
@@ -437,6 +437,13 @@ function showTooltip(position, word, definition) {
     styleSheet.id = 'urdu-dictionary-styles';
     styleSheet.textContent = `
       @import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
+      
+      @font-face {
+        font-family: 'Noto Nastaliq Urdu';
+        font-style: normal;
+        font-weight: 400;
+        src: url(https://fonts.gstatic.com/s/notonastaliqurdu/v20/LhWNMUPbN-oZdNFcBy1-DJYsEoTq5pudQ9L940pGPkB3Qt_-DK2f3rQ.woff2) format('woff2');
+      }
       
       @keyframes tooltipFadeIn {
         from { 
@@ -496,190 +503,57 @@ function lookupWord(word) {
   console.log('📖 Looking up word:', word);
   isProcessing = true;
   
-  // Try Pakistan Urdu Dictionary Board (UDB) first for English definition
-  lookupUDB(word)
-    .then(definition => {
-      if (definition) {
-        updateTooltipDefinition(definition);
-        // Also get Urdu meaning from Google Translate
-        getUrduMeaning(word);
-        isProcessing = false;
-      } else {
-        console.log('Word not found in UDB, falling back to Google Translate');
-        translateWord(word);
-        // Still try to get Urdu meaning
-        getUrduMeaning(word);
-      }
-    })
-    .catch(error => {
-      console.error('UDB lookup error:', error);
-      translateWord(word);
-      getUrduMeaning(word);
-    });
+  // Use Google Translate for English meaning (reliable and fast)
+  translateWord(word);
+  
+  // Also get Urdu meaning
+  getUrduMeaning(word);
 }
 
 async function getUrduMeaning(word) {
-  // Get Urdu to Urdu meaning/explanation using Google Translate
-  // This will give us an Urdu explanation of the word
+  // Get Urdu explanation by translating the word's English meaning back to Urdu
   try {
-    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=ur&dt=t&q=${encodeURIComponent(word)}`;
-    
-    const response = await fetch(url);
-    if (!response.ok) return;
-    
-    const data = await response.json();
-    
-    // Try to get a meaningful Urdu explanation
-    // Note: Urdu-to-Urdu might just return the same word, so we'll also try getting definition
-    let urduMeaning = '';
-    
-    // Alternative: Use English-to-Urdu for the English meaning we found
-    if (currentTooltip) {
-      const definitionElement = currentTooltip.querySelector('#definition-text');
-      if (definitionElement && definitionElement.textContent !== 'Looking up...') {
-        const englishDef = definitionElement.textContent.substring(0, 100); // First 100 chars
-        
-        // Translate the English definition to Urdu
-        const urduUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ur&dt=t&q=${encodeURIComponent(englishDef)}`;
-        
-        const urduResponse = await fetch(urduUrl);
-        if (urduResponse.ok) {
-          const urduData = await urduResponse.json();
-          if (urduData && urduData[0] && Array.isArray(urduData[0])) {
-            urduMeaning = urduData[0]
-              .filter(item => item && item[0])
-              .map(item => item[0])
-              .join('');
+    // Wait a bit for the English definition to be ready
+    setTimeout(async () => {
+      if (currentTooltip) {
+        const definitionElement = currentTooltip.querySelector('#definition-text');
+        if (definitionElement && 
+            definitionElement.textContent !== 'Looking up...' &&
+            !definitionElement.textContent.includes('❌') &&
+            definitionElement.textContent.length > 3) {
+          
+          const englishDef = definitionElement.textContent.substring(0, 150); // First 150 chars
+          
+          // Translate the English definition to Urdu
+          const urduUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ur&dt=t&q=${encodeURIComponent(englishDef)}`;
+          
+          const urduResponse = await fetch(urduUrl);
+          if (urduResponse.ok) {
+            const urduData = await urduResponse.json();
+            if (urduData && urduData[0] && Array.isArray(urduData[0])) {
+              const urduMeaning = urduData[0]
+                .filter(item => item && item[0])
+                .map(item => item[0])
+                .join('');
+              
+              // Update tooltip with Urdu meaning
+              if (urduMeaning && currentTooltip) {
+                const urduElement = currentTooltip.querySelector('#urdu-meaning-text');
+                if (urduElement) {
+                  urduElement.textContent = urduMeaning;
+                  urduElement.style.display = 'block';
+                }
+              }
+            }
           }
         }
       }
-    }
-    
-    // Update tooltip with Urdu meaning
-    if (urduMeaning && currentTooltip) {
-      const urduElement = currentTooltip.querySelector('#urdu-meaning-text');
-      if (urduElement) {
-        urduElement.textContent = urduMeaning;
-        urduElement.style.display = 'block';
-      }
-    }
+    }, 800); // Wait 800ms for English translation to complete
   } catch (error) {
     console.error('Error getting Urdu meaning:', error);
   }
 }
 
-async function lookupUDB(word) {
-  if (!navigator.onLine) {
-    updateTooltipDefinition('⚠️ You are currently offline');
-    isProcessing = false;
-    return null;
-  }
-  
-  try {
-    // Pakistan Urdu Dictionary Board search URL
-    const url = `https://udb.gov.pk/result.php?search=${encodeURIComponent(word)}`;
-    
-    const response = await fetch(url, {
-      method: 'GET',
-      mode: 'cors'
-    });
-    
-    if (!response.ok) {
-      console.log('UDB response not OK:', response.status);
-      return null;
-    }
-    
-    const html = await response.text();
-    
-    // Parse the HTML response
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    
-    // Look for definition in the page
-    // UDB returns results in a table or div format
-    
-    // Try multiple selectors to find the definition
-    let definition = '';
-    
-    // Method 1: Look for specific result containers
-    const resultContainers = doc.querySelectorAll('.result, .definition, .meaning, table tr td');
-    
-    for (const container of resultContainers) {
-      const text = container.textContent.trim();
-      // Filter out navigation, headers, and short text
-      if (text.length > 15 && 
-          !text.includes('تلاش') && 
-          !text.includes('مفصل تلاش') &&
-          !text.includes('Search') &&
-          !text.includes('Copyright')) {
-        
-        // Clean up the text
-        definition = text
-          .replace(/\s+/g, ' ')
-          .replace(/\n+/g, ' ')
-          .trim();
-        
-        // If we found something meaningful, break
-        if (definition.length > 20) {
-          break;
-        }
-      }
-    }
-    
-    // Method 2: If no definition found, try all paragraphs and divs
-    if (!definition || definition.length < 20) {
-      const allText = doc.querySelectorAll('p, div');
-      
-      for (const elem of allText) {
-        const text = elem.textContent.trim();
-        
-        // Look for text that contains the word and looks like a definition
-        if (text.includes(word) && text.length > 30 && text.length < 500) {
-          definition = text
-            .replace(/\s+/g, ' ')
-            .trim();
-          break;
-        }
-      }
-    }
-    
-    // Method 3: Extract any meaningful text from the page body
-    if (!definition || definition.length < 20) {
-      const bodyText = doc.body ? doc.body.textContent : '';
-      const lines = bodyText.split('\n').filter(line => {
-        const trimmed = line.trim();
-        return trimmed.length > 30 && 
-               trimmed.length < 500 &&
-               !trimmed.includes('Copyright') &&
-               !trimmed.includes('تلاش');
-      });
-      
-      if (lines.length > 0) {
-        definition = lines[0].replace(/\s+/g, ' ').trim();
-      }
-    }
-    
-    // Limit length for tooltip
-    if (definition && definition.length > 0) {
-      if (definition.length > 400) {
-        definition = definition.substring(0, 400) + '...';
-      }
-      
-      // Check if it's a valid definition (not just error messages)
-      if (!definition.includes('not found') && 
-          !definition.includes('نتیجہ نہیں') &&
-          definition.length > 15) {
-        return definition;
-      }
-    }
-    
-    return null;
-    
-  } catch (error) {
-    console.error('Error fetching from UDB:', error);
-    return null;
-  }
-}
 
 function translateWord(word) {
   if (!navigator.onLine) {
