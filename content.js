@@ -8,6 +8,8 @@ let lastMousePos = { x: 0, y: 0 };
 let currentHighlight = null;
 let isProcessing = false;
 
+let currentWordData = null; // Store current word data for detailed view
+
 // Urdu Unicode range
 const URDU_REGEX = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]+/;
 
