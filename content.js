@@ -423,7 +423,10 @@ function showTooltip(position, word, definition) {
   
   currentTooltip.innerHTML = `
     <div style="color: #d97706; font-weight: 600; margin-bottom: 8px; font-size: 20px; direction: rtl; text-align: right; letter-spacing: 0.3px; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; line-height: 1.8;">${word}</div>
-    <div style="color: #475569; line-height: 1.5; font-size: 12px;" id="definition-text">${definition}</div>
+    <div id="word-type-text" style="color: #f59e0b; font-size: 10px; font-style: italic; margin-bottom: 6px; display: none;"></div>
+    <div style="color: #475569; margin-bottom: 6px; line-height: 1.5; font-size: 12px;" id="definition-text">${definition}</div>
+    <div id="synonyms-text" style="color: #6366f1; font-size: 11px; margin-bottom: 6px; line-height: 1.4; display: none;"></div>
+    <div id="urdu-meaning-text" style="color: #059669; line-height: 1.7; font-size: 13px; direction: rtl; text-align: right; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; display: none; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-top: 6px;"></div>
     <div style="color: #94a3b8; font-size: 9px; border-top: 1px solid #e2e8f0; padding-top: 5px; margin-top: 8px; text-align: center; font-weight: 500;">
       Press 'C' to copy • ESC to close
     </div>
@@ -501,40 +504,122 @@ function lookupWord(word) {
   console.log('📖 Looking up word:', word);
   isProcessing = true;
   
-  // Just get Urdu meaning (English definition was redundant)
-  getUrduMeaning(word);
+  // Get English translation
+  translateWord(word);
 }
 
-async function getUrduMeaning(word) {
-  // Get Urdu explanation by translating the word to English first, then that to Urdu
+function translateWord(word) {
+  if (!navigator.onLine) {
+    updateDefinition('⚠️ You are currently offline');
+    isProcessing = false;
+    return;
+  }
+  
+  // Request multiple data types: t=translation, bd=dictionary, ss=synonyms
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&dt=bd&dt=ss&q=${encodeURIComponent(word)}`;
+  
+  fetch(url)
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      return response.json();
+    })
+    .then(data => {
+      console.log('Google Translate response:', data);
+      
+      let translation = '';
+      let wordType = '';
+      let synonyms = [];
+      
+      // Get translation (index 0)
+      if (data && data[0] && Array.isArray(data[0])) {
+        translation = data[0]
+          .filter(item => item && item[0])
+          .map(item => item[0])
+          .join('');
+      }
+      
+      // Get word type and synonyms from dictionary data (index 1)
+      if (data && data[1] && Array.isArray(data[1])) {
+        // data[1] contains dictionary entries with word types
+        for (const entry of data[1]) {
+          if (entry && entry[0]) {
+            wordType = entry[0]; // noun, verb, adjective, etc.
+            
+            // Get synonyms from this entry
+            if (entry[1] && Array.isArray(entry[1])) {
+              synonyms = entry[1]
+                .slice(0, 3) // Take first 3 synonyms
+                .map(item => item[0])
+                .filter(s => s && s.length > 0);
+            }
+            break; // Use first entry
+          }
+        }
+      }
+      
+      // Get additional synonyms (index 11)
+      if (data && data[11] && Array.isArray(data[11])) {
+        const moreSynonyms = data[11]
+          .flat()
+          .filter(item => typeof item === 'string' && item.length > 0)
+          .slice(0, 3);
+        
+        synonyms = [...new Set([...synonyms, ...moreSynonyms])].slice(0, 3);
+      }
+      
+      // Update UI
+      if (translation && translation.trim()) {
+        updateDefinition(translation.trim());
+        
+        // Show word type
+        if (wordType) {
+          updateWordType(wordType);
+        }
+        
+        // Show synonyms
+        if (synonyms.length > 0) {
+          updateSynonyms(synonyms);
+        }
+        
+        // Get Urdu meaning
+        getUrduMeaning(word, translation.trim());
+      } else {
+        updateDefinition('Translation not available');
+        isProcessing = false;
+      }
+    })
+    .catch(error => {
+      console.error('Translation error:', error);
+      updateDefinition('❌ Translation failed');
+      isProcessing = false;
+    });
+}
+
+function updateWordType(type) {
+  if (currentTooltip) {
+    const typeElement = currentTooltip.querySelector('#word-type-text');
+    if (typeElement) {
+      typeElement.textContent = type;
+      typeElement.style.display = 'block';
+    }
+  }
+}
+
+function updateSynonyms(synonyms) {
+  if (currentTooltip && synonyms.length > 0) {
+    const synElement = currentTooltip.querySelector('#synonyms-text');
+    if (synElement) {
+      synElement.textContent = '📝 ' + synonyms.join(', ');
+      synElement.style.display = 'block';
+    }
+  }
+}
+
+async function getUrduMeaning(originalWord, englishTranslation) {
   try {
-    // First translate Urdu word to English
-    const englishUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&q=${encodeURIComponent(word)}`;
-    
-    const englishResponse = await fetch(englishUrl);
-    if (!englishResponse.ok) {
-      updateUrduMeaning('معنی دستیاب نہیں');
-      isProcessing = false;
-      return;
-    }
-    
-    const englishData = await englishResponse.json();
-    let englishTranslation = '';
-    
-    if (englishData && englishData[0] && Array.isArray(englishData[0])) {
-      englishTranslation = englishData[0]
-        .filter(item => item && item[0])
-        .map(item => item[0])
-        .join('');
-    }
-    
-    if (!englishTranslation || englishTranslation.trim().length < 2) {
-      updateUrduMeaning('معنی دستیاب نہیں');
-      isProcessing = false;
-      return;
-    }
-    
-    // Now translate the English meaning back to Urdu for explanation
+    // Translate the English meaning back to Urdu
     const urduUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ur&dt=t&q=${encodeURIComponent(englishTranslation)}`;
     
     const urduResponse = await fetch(urduUrl);
@@ -544,23 +629,33 @@ async function getUrduMeaning(word) {
         const urduMeaning = urduData[0]
           .filter(item => item && item[0])
           .map(item => item[0])
-          .join('');
+          .join('')
+          .trim();
         
-        if (urduMeaning && urduMeaning.trim()) {
-          updateUrduMeaning(urduMeaning.trim());
-        } else {
-          updateUrduMeaning('معنی دستیاب نہیں');
+        // Check if Urdu meaning is different from original word
+        // Remove diacritics and spaces for comparison
+        const normalizedOriginal = originalWord.replace(/[\u064B-\u065F\u0670\s]/g, '');
+        const normalizedMeaning = urduMeaning.replace(/[\u064B-\u065F\u0670\s]/g, '');
+        
+        // Only show if they're different
+        if (urduMeaning && normalizedMeaning !== normalizedOriginal) {
+          updateUrduMeaning(urduMeaning);
         }
       }
-    } else {
-      updateUrduMeaning('معنی دستیاب نہیں');
     }
-    
     isProcessing = false;
   } catch (error) {
     console.error('Error getting Urdu meaning:', error);
-    updateUrduMeaning('❌ خرابی');
     isProcessing = false;
+  }
+}
+
+function updateDefinition(definition) {
+  if (currentTooltip) {
+    const definitionElement = currentTooltip.querySelector('#definition-text');
+    if (definitionElement) {
+      definitionElement.textContent = definition;
+    }
   }
 }
 
