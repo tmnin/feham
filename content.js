@@ -423,9 +423,8 @@ function showTooltip(position, word, definition) {
   
   currentTooltip.innerHTML = `
     <div style="color: #d97706; font-weight: 600; margin-bottom: 8px; font-size: 20px; direction: rtl; text-align: right; letter-spacing: 0.3px; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; line-height: 1.8;">${word}</div>
-    <div style="color: #475569; margin-bottom: 6px; line-height: 1.5; font-size: 12px;" id="definition-text">${definition}</div>
-    <div id="urdu-meaning-text" style="color: #059669; margin-bottom: 6px; line-height: 1.7; font-size: 13px; direction: rtl; text-align: right; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; display: none; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-top: 6px;"></div>
-    <div style="color: #94a3b8; font-size: 9px; border-top: 1px solid #e2e8f0; padding-top: 5px; text-align: center; font-weight: 500;">
+    <div style="color: #475569; line-height: 1.5; font-size: 12px;" id="definition-text">${definition}</div>
+    <div style="color: #94a3b8; font-size: 9px; border-top: 1px solid #e2e8f0; padding-top: 5px; margin-top: 8px; text-align: center; font-weight: 500;">
       Press 'C' to copy • ESC to close
     </div>
   `;
@@ -502,122 +501,80 @@ function lookupWord(word) {
   console.log('📖 Looking up word:', word);
   isProcessing = true;
   
-  // Use Google Translate for English meaning (reliable and fast)
-  translateWord(word);
-  
-  // Also get Urdu meaning
+  // Just get Urdu meaning (English definition was redundant)
   getUrduMeaning(word);
 }
 
 async function getUrduMeaning(word) {
-  // Get Urdu explanation by translating the word's English meaning back to Urdu
+  // Get Urdu explanation by translating the word to English first, then that to Urdu
   try {
-    // Wait a bit for the English definition to be ready
-    setTimeout(async () => {
-      if (currentTooltip) {
-        const definitionElement = currentTooltip.querySelector('#definition-text');
-        if (definitionElement && 
-            definitionElement.textContent !== 'Looking up...' &&
-            !definitionElement.textContent.includes('❌') &&
-            definitionElement.textContent.length > 3) {
-          
-          const englishDef = definitionElement.textContent.substring(0, 150); // First 150 chars
-          
-          // Translate the English definition to Urdu
-          const urduUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ur&dt=t&q=${encodeURIComponent(englishDef)}`;
-          
-          const urduResponse = await fetch(urduUrl);
-          if (urduResponse.ok) {
-            const urduData = await urduResponse.json();
-            if (urduData && urduData[0] && Array.isArray(urduData[0])) {
-              const urduMeaning = urduData[0]
-                .filter(item => item && item[0])
-                .map(item => item[0])
-                .join('');
-              
-              // Update tooltip with Urdu meaning
-              if (urduMeaning && currentTooltip) {
-                const urduElement = currentTooltip.querySelector('#urdu-meaning-text');
-                if (urduElement) {
-                  urduElement.textContent = urduMeaning;
-                  urduElement.style.display = 'block';
-                }
-              }
-            }
-          }
-        }
-      }
-    }, 800); // Wait 800ms for English translation to complete
-  } catch (error) {
-    console.error('Error getting Urdu meaning:', error);
-  }
-}
-
-
-function translateWord(word) {
-  if (!navigator.onLine) {
-    updateTooltipDefinition('⚠️ You are currently offline');
-    isProcessing = false;
-    return;
-  }
-  
-  // Use Google Translate with additional context request
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&dt=bd&q=${encodeURIComponent(word)}`;
-  
-  fetch(url)
-    .then(response => {
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return response.json();
-    })
-    .then(data => {
-      let translation = '';
-      let hasDefinition = false;
-      
-      if (data && data[0] && Array.isArray(data[0])) {
-        translation = data[0]
+    // First translate Urdu word to English
+    const englishUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&q=${encodeURIComponent(word)}`;
+    
+    const englishResponse = await fetch(englishUrl);
+    if (!englishResponse.ok) {
+      updateUrduMeaning('معنی دستیاب نہیں');
+      isProcessing = false;
+      return;
+    }
+    
+    const englishData = await englishResponse.json();
+    let englishTranslation = '';
+    
+    if (englishData && englishData[0] && Array.isArray(englishData[0])) {
+      englishTranslation = englishData[0]
+        .filter(item => item && item[0])
+        .map(item => item[0])
+        .join('');
+    }
+    
+    if (!englishTranslation || englishTranslation.trim().length < 2) {
+      updateUrduMeaning('معنی دستیاب نہیں');
+      isProcessing = false;
+      return;
+    }
+    
+    // Now translate the English meaning back to Urdu for explanation
+    const urduUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ur&dt=t&q=${encodeURIComponent(englishTranslation)}`;
+    
+    const urduResponse = await fetch(urduUrl);
+    if (urduResponse.ok) {
+      const urduData = await urduResponse.json();
+      if (urduData && urduData[0] && Array.isArray(urduData[0])) {
+        const urduMeaning = urduData[0]
           .filter(item => item && item[0])
           .map(item => item[0])
           .join('');
+        
+        if (urduMeaning && urduMeaning.trim()) {
+          updateUrduMeaning(urduMeaning.trim());
+        } else {
+          updateUrduMeaning('معنی دستیاب نہیں');
+        }
       }
-      
-      // Check if translation is just repeating the same word (redundant)
-      const isRedundant = translation.toLowerCase().trim() === word.toLowerCase().trim() ||
-                          translation.length < 2;
-      
-      if (translation && translation.trim() && !isRedundant) {
-        updateTooltipDefinition(translation.trim());
-        hasDefinition = true;
-      } else {
-        // If redundant or empty, try to get synonyms/related words
-        // For now, just show a generic message
-        updateTooltipDefinition('(Translation unavailable)');
-      }
-      
-      isProcessing = false;
-    })
-    .catch(error => {
-      console.error('Translation error:', error);
-      updateTooltipDefinition('❌ Translation failed');
-      isProcessing = false;
-    });
+    } else {
+      updateUrduMeaning('معنی دستیاب نہیں');
+    }
+    
+    isProcessing = false;
+  } catch (error) {
+    console.error('Error getting Urdu meaning:', error);
+    updateUrduMeaning('❌ خرابی');
+    isProcessing = false;
+  }
 }
 
-function updateTooltipDefinition(definition) {
+function updateUrduMeaning(meaning) {
   if (currentTooltip) {
-    const definitionElement = currentTooltip.querySelector('#definition-text');
-    if (definitionElement) {
-      // If definition is redundant or unavailable, hide it
-      if (definition.includes('unavailable') || definition.includes('Translation not available')) {
-        definitionElement.style.display = 'none';
-      } else {
-        definitionElement.textContent = definition;
-        definitionElement.style.display = 'block';
-      }
+    const urduElement = currentTooltip.querySelector('#urdu-meaning-text');
+    if (urduElement) {
+      urduElement.textContent = meaning;
+      urduElement.style.display = 'block';
     }
   }
 }
+
+
 
 function copyToClipboard(text) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -660,7 +617,7 @@ function showCopyFeedback() {
     const footer = currentTooltip.querySelector('div:last-child');
     if (footer) {
       const originalText = footer.innerHTML;
-      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">✓ Copied</span>';
+      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">✓ Copied!</span>';
       setTimeout(() => {
         if (footer && currentTooltip) {
           footer.innerHTML = originalText;
