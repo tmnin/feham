@@ -561,7 +561,8 @@ function translateWord(word) {
     return;
   }
   
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&q=${encodeURIComponent(word)}`;
+  // Use Google Translate with additional context request
+  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&dt=bd&q=${encodeURIComponent(word)}`;
   
   fetch(url)
     .then(response => {
@@ -572,6 +573,8 @@ function translateWord(word) {
     })
     .then(data => {
       let translation = '';
+      let hasDefinition = false;
+      
       if (data && data[0] && Array.isArray(data[0])) {
         translation = data[0]
           .filter(item => item && item[0])
@@ -579,11 +582,19 @@ function translateWord(word) {
           .join('');
       }
       
-      if (translation && translation.trim()) {
+      // Check if translation is just repeating the same word (redundant)
+      const isRedundant = translation.toLowerCase().trim() === word.toLowerCase().trim() ||
+                          translation.length < 2;
+      
+      if (translation && translation.trim() && !isRedundant) {
         updateTooltipDefinition(translation.trim());
+        hasDefinition = true;
       } else {
-        updateTooltipDefinition('Translation not available');
+        // If redundant or empty, try to get synonyms/related words
+        // For now, just show a generic message
+        updateTooltipDefinition('(Translation unavailable)');
       }
+      
       isProcessing = false;
     })
     .catch(error => {
@@ -597,7 +608,13 @@ function updateTooltipDefinition(definition) {
   if (currentTooltip) {
     const definitionElement = currentTooltip.querySelector('#definition-text');
     if (definitionElement) {
-      definitionElement.textContent = definition;
+      // If definition is redundant or unavailable, hide it
+      if (definition.includes('unavailable') || definition.includes('Translation not available')) {
+        definitionElement.style.display = 'none';
+      } else {
+        definitionElement.textContent = definition;
+        definitionElement.style.display = 'block';
+      }
     }
   }
 }
@@ -643,7 +660,7 @@ function showCopyFeedback() {
     const footer = currentTooltip.querySelector('div:last-child');
     if (footer) {
       const originalText = footer.innerHTML;
-      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">✓ Copied!</span>';
+      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">✓ Copied</span>';
       setTimeout(() => {
         if (footer && currentTooltip) {
           footer.innerHTML = originalText;
