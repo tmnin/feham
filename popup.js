@@ -29,11 +29,33 @@ for (const [key, { node }] of Object.entries(switches)) {
   });
 }
 
+// --- font picker -----------------------------------------------------------
+
+const fontOptions = [...document.querySelectorAll('.font-opt')];
+
+function paintFont(font) {
+  for (const option of fontOptions) {
+    option.setAttribute('aria-checked', String(option.dataset.font === font));
+  }
+}
+
+chrome.storage.sync.get('font', ({ font }) => {
+  paintFont(font === 'naskh' ? 'naskh' : 'nastaliq');
+});
+
+for (const option of fontOptions) {
+  option.addEventListener('click', () => {
+    paintFont(option.dataset.font);
+    chrome.storage.sync.set({ font: option.dataset.font });
+  });
+}
+
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
   for (const key of Object.keys(switches)) {
     if (changes[key]) paint(key, changes[key].newValue !== false);
   }
+  if (changes.font) paintFont(changes.font.newValue === 'naskh' ? 'naskh' : 'nastaliq');
 });
 
 const clearButton = document.getElementById('clearCache');

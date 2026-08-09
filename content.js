@@ -16,7 +16,49 @@
   const HOVER_DELAY_MS = 130;
   const MAX_WORD_LEN = 40;
 
-  const settings = { enabled: true, requireShift: false };
+  const settings = { enabled: true, requireShift: false, font: 'nastaliq' };
+
+  // Urdu is traditionally set in Nastaliq, but it's dense and hard to read at
+  // small sizes, so Naskh is offered as an alternative. Both are bundled.
+  const FONTS = {
+    nastaliq: {
+      family: 'Feham Nastaliq',
+      file: 'fonts/NotoNastaliqUrdu.woff2',
+      stack: "'Feham Nastaliq', 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif",
+      lineHeight: 2.1,
+    },
+    naskh: {
+      family: 'Feham Naskh',
+      file: 'fonts/NotoNaskhArabic.woff2',
+      stack: "'Feham Naskh', 'Noto Naskh Arabic', serif",
+      lineHeight: 1.7,
+    },
+  };
+  const fontChoice = () => FONTS[settings.font] || FONTS.nastaliq;
+
+  // Chrome ignores @font-face rules declared inside a shadow root — faces must
+  // be registered on the document. Declaring one in the shadow stylesheet fails
+  // silently and everything falls back to the system serif (i.e. Naskh).
+  //
+  // Registering it from binary rather than a url() also dodges the page's CSP:
+  // a font fetched by url() from a content-script stylesheet is a real network
+  // request that strict sites (bbc.com) refuse, but FontFace built from an
+  // ArrayBuffer performs no request at all.
+  const fontsLoaded = new Set();
+
+  async function ensureFontLoaded(key) {
+    const spec = FONTS[key];
+    if (!spec || fontsLoaded.has(key) || typeof FontFace !== 'function') return;
+    fontsLoaded.add(key);
+    try {
+      const response = await fetch(chrome.runtime.getURL(spec.file));
+      const face = new FontFace(spec.family, await response.arrayBuffer());
+      await face.load();
+      document.fonts.add(face);
+    } catch (_) {
+      fontsLoaded.delete(key); // let a later hover retry
+    }
+  }
 
   let host = null;
   let shadow = null;
@@ -73,19 +115,21 @@
     return null;
   }
 
-  function wordAtPoint(x, y) {
-    const caret = caretAt(x, y);
-    if (!caret || !caret.node || caret.node.nodeType !== Node.TEXT_NODE) return null;
+  const containsPoint = (r, x, y) =>
+    x >= r.left - 2 && x <= r.right + 2 && y >= r.top - 2 && y <= r.bottom + 2;
 
-    const textNode = caret.node;
+  // Grow a word outwards from one character position, then confirm the pointer
+  // is really over the resulting glyphs — a caret position alone isn't proof,
+  // since it also resolves for points in the margin beside the text.
+  function expandWordAt(textNode, offset, x, y) {
     const text = textNode.textContent || '';
     if (!text.trim()) return null;
 
     // The caret snaps to the nearest position, so it can land just past the end
     // of a word. Prefer the character under the cursor, then the one before it.
-    let index = Math.min(caret.offset, text.length - 1);
-    if (!isWordChar(text.charAt(index)) && caret.offset > 0 && isWordChar(text.charAt(caret.offset - 1))) {
-      index = caret.offset - 1;
+    let index = Math.min(offset, text.length - 1);
+    if (!isWordChar(text.charAt(index)) && offset > 0 && isWordChar(text.charAt(offset - 1))) {
+      index = offset - 1;
     }
     if (index < 0 || !isWordChar(text.charAt(index))) return null;
 
@@ -101,13 +145,71 @@
     range.setStart(textNode, start);
     range.setEnd(textNode, end);
 
-    // caretRangeFromPoint returns a position even when the pointer is in the
-    // page margin next to the text, so confirm we're really over the glyphs.
     const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
-    const over = rects.some((r) => x >= r.left - 2 && x <= r.right + 2 && y >= r.top - 2 && y <= r.bottom + 2);
-    if (!over) return null;
+    if (!rects.some((r) => containsPoint(r, x, y))) return null;
 
     return { word, rects };
+  }
+
+  // Sites that make a whole card clickable (BBC's article promos, most news
+  // grids) overlay the headline with a positioned pseudo-element. The caret
+  // then resolves to offset 0 of the block rather than the character under the
+  // pointer, so the fast path finds either nothing or the wrong word. Hit-test
+  // characters directly instead. Only runs when the fast path has already
+  // failed, so the per-character cost stays off the common path.
+  const MAX_SCAN_CHARS = 1500;
+
+  function characterAtPoint(x, y) {
+    const stack =
+      typeof document.elementsFromPoint === 'function'
+        ? document.elementsFromPoint(x, y)
+        : [document.elementFromPoint(x, y)];
+
+    let examined = 0;
+    for (const element of stack) {
+      if (!element || element === host) continue;
+      if (examined >= 4) break;
+      examined++;
+
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => {
+          const value = node.textContent;
+          return value && value.trim() && value.length <= MAX_SCAN_CHARS
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT;
+        },
+      });
+
+      const range = document.createRange();
+      let node;
+      while ((node = walker.nextNode())) {
+        // Cheap reject: is the pointer inside this node's boxes at all?
+        range.selectNodeContents(node);
+        if (![...range.getClientRects()].some((r) => containsPoint(r, x, y))) continue;
+
+        const text = node.textContent;
+        for (let i = 0; i < text.length; i++) {
+          if (!isWordChar(text.charAt(i))) continue;
+          range.setStart(node, i);
+          range.setEnd(node, i + 1);
+          if ([...range.getClientRects()].some((r) => containsPoint(r, x, y))) {
+            return { node, offset: i };
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function wordAtPoint(x, y) {
+    const caret = caretAt(x, y);
+    if (caret && caret.node && caret.node.nodeType === Node.TEXT_NODE) {
+      const hit = expandWordAt(caret.node, caret.offset, x, y);
+      if (hit) return hit;
+    }
+
+    const fallback = characterAtPoint(x, y);
+    return fallback ? expandWordAt(fallback.node, fallback.offset, x, y) : null;
   }
 
   // -------------------------------------------------------------------------
@@ -121,21 +223,10 @@
     host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483647;';
     shadow = host.attachShadow({ mode: 'open' });
 
-    let fontUrl = '';
-    try {
-      fontUrl = chrome.runtime.getURL('fonts/NotoNastaliqUrdu.woff2');
-    } catch (_) {
-      /* extension context gone; fall back to system fonts */
-    }
+    const chosen = fontChoice();
 
     const style = document.createElement('style');
     style.textContent = `
-      ${fontUrl ? `@font-face {
-        font-family: 'Feham Nastaliq';
-        src: url('${fontUrl}') format('woff2');
-        font-display: swap;
-      }` : ''}
-
       :host { all: initial; }
       * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -143,8 +234,8 @@
 
       .rect {
         position: fixed;
-        background: rgba(251, 191, 36, 0.28);
-        border-bottom: 2px solid rgba(217, 119, 6, 0.85);
+        background: rgba(1, 65, 28, 0.14);
+        border-bottom: 2px solid rgba(1, 65, 28, 0.75);
         border-radius: 3px;
         pointer-events: none;
       }
@@ -155,12 +246,12 @@
         min-width: 190px;
         background: #ffffff;
         color: #1e293b;
-        border: 1px solid #e2e8f0;
-        border-top: 3px solid #f59e0b;
+        border: 1px solid #cfe3d6;
+        border-top: 3px solid #01411c;
         border-radius: 10px;
         padding: 12px 14px;
         font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+        box-shadow: 0 10px 30px rgba(1, 65, 28, 0.16);
         pointer-events: none;
         opacity: 0;
         transition: opacity .12s ease;
@@ -168,14 +259,14 @@
       .card.visible { opacity: 1; }
 
       .urdu {
-        font-family: 'Feham Nastaliq', 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif;
+        font-family: ${chosen.stack};
         direction: rtl;
         text-align: right;
-        line-height: 2.1;
+        line-height: ${chosen.lineHeight};
       }
 
       .head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-      .word { font-size: 21px; color: #b45309; font-weight: 600; }
+      .word { font-size: 21px; color: #01411c; font-weight: 600; }
       .roman { font-size: 11px; color: #64748b; font-style: italic; white-space: nowrap; }
 
       .main { font-size: 15px; font-weight: 600; color: #0f172a; margin-top: 4px; }
@@ -189,8 +280,8 @@
         font-size: 10px;
         text-transform: uppercase;
         letter-spacing: .5px;
-        color: #92400e;
-        background: #fef3c7;
+        color: #046a38;
+        background: #e8f5ec;
         border-radius: 4px;
         padding: 1px 5px;
         margin-inline-end: 6px;
@@ -206,12 +297,12 @@
         color: #94a3b8;
         text-align: center;
       }
-      .foot.ok { color: #059669; font-weight: 600; }
+      .foot.ok { color: #046a38; font-weight: 600; }
 
       .backdrop {
         position: fixed;
         inset: 0;
-        background: rgba(15, 23, 42, 0.45);
+        background: rgba(1, 42, 18, 0.5);
         pointer-events: auto;
       }
       .detail {
@@ -224,31 +315,31 @@
         background: #ffffff;
         color: #1e293b;
         border-radius: 14px;
-        border-top: 4px solid #f59e0b;
+        border-top: 4px solid #01411c;
         padding: 22px;
         font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-        box-shadow: 0 24px 60px rgba(15, 23, 42, .35);
+        box-shadow: 0 24px 60px rgba(1, 42, 18, .38);
         pointer-events: auto;
       }
       .detail .word { font-size: 30px; display: block; text-align: center; }
       .detail .roman { display: block; text-align: center; margin-top: 2px; }
       .detail .main { text-align: center; font-size: 17px; margin-top: 6px; }
       .group { margin-top: 16px; padding-top: 14px; border-top: 1px solid #f1f5f9; }
-      .group h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #92400e; margin-bottom: 6px; }
+      .group h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #046a38; margin-bottom: 6px; }
       .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
-      .row .back { color: #059669; font-size: 15px; }
+      .row .back { color: #046a38; font-size: 15px; }
       .close {
         margin-top: 18px;
         width: 100%;
         padding: 9px;
         border: 0;
         border-radius: 8px;
-        background: #f59e0b;
+        background: #01411c;
         color: #fff;
         font: 600 13px/1 inherit;
         cursor: pointer;
       }
-      .close:hover { background: #d97706; }
+      .close:hover { background: #046a38; }
 
       @media (prefers-reduced-motion: reduce) {
         .card { transition: none; }
@@ -634,10 +725,25 @@
     else disable();
   }
 
-  chrome.storage.sync.get(['enabled', 'requireShift'], (stored) => {
+  // The @font-face and .urdu rules are baked into the shadow stylesheet when the
+  // UI is first built, so a font change means discarding and rebuilding it.
+  function rebuildUI() {
+    hideDetail();
+    hideTooltip();
+    if (host) host.remove();
+    host = null;
+    shadow = null;
+    tooltip = null;
+    highlightLayer = null;
+    detailLayer = null;
+  }
+
+  chrome.storage.sync.get(['enabled', 'requireShift', 'font'], (stored) => {
     if (chrome.runtime.lastError) return;
     settings.enabled = stored.enabled !== false;
     settings.requireShift = stored.requireShift === true;
+    if (FONTS[stored.font]) settings.font = stored.font;
+    ensureFontLoaded(settings.font);
     applySettings();
   });
 
@@ -647,6 +753,11 @@
     if (area !== 'sync') return;
     if (changes.enabled) settings.enabled = changes.enabled.newValue !== false;
     if (changes.requireShift) settings.requireShift = changes.requireShift.newValue === true;
+    if (changes.font && FONTS[changes.font.newValue]) {
+      settings.font = changes.font.newValue;
+      ensureFontLoaded(settings.font);
+      rebuildUI();
+    }
     applySettings();
   });
 })();

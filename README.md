@@ -21,8 +21,13 @@ transliteration, English meaning, and dictionary entry.
 | <kbd>K</kbd> | full dictionary entry (all senses, Urdu back-translations) |
 | <kbd>Esc</kbd> | dismiss |
 
-The toolbar popup has an on/off switch and a **Hold Shift to look up** mode, for
-when you want to read without tooltips constantly appearing.
+The toolbar popup has an on/off switch, a **Hold Shift to look up** mode for when
+you want to read without tooltips constantly appearing, and an **Urdu font**
+picker — Nastaliq (default) or Naskh, previewed live in the picker itself.
+
+The font applies to Feham's own tooltip and detail panel; page text is left
+alone. Both faces are bundled, so nothing is fetched at runtime. Changing it
+takes effect immediately in open tabs.
 
 ## How it works
 
@@ -53,7 +58,7 @@ transliterated rather than translated (`کے` → "K"), so `pickPrimary()` in
 | `content.js` | word detection, tooltip, highlight — all UI in a shadow root |
 | `background.js` | lookups, response parsing, caching |
 | `popup.html/js` | settings |
-| `fonts/` | Noto Nastaliq Urdu, bundled so tooltips render without a network fetch |
+| `fonts/` | Noto Nastaliq Urdu + Noto Naskh Arabic, bundled so tooltips render without a network fetch |
 
 Two things worth knowing if you edit this:
 

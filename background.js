@@ -258,10 +258,11 @@ async function updateBadge() {
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const current = await chrome.storage.sync.get(['enabled', 'requireShift']);
+  const current = await chrome.storage.sync.get(['enabled', 'requireShift', 'font']);
   const defaults = {};
   if (typeof current.enabled !== 'boolean') defaults.enabled = true;
   if (typeof current.requireShift !== 'boolean') defaults.requireShift = false;
+  if (current.font !== 'nastaliq' && current.font !== 'naskh') defaults.font = 'nastaliq';
   if (Object.keys(defaults).length) await chrome.storage.sync.set(defaults);
   updateBadge();
 });
