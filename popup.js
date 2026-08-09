@@ -1,35 +1,48 @@
-// Popup script for Urdu Translator
-const toggleSwitch = document.getElementById('toggleSwitch');
+// Feham — popup.
+//
+// The popup only writes settings to chrome.storage.sync. Content scripts pick
+// the change up via chrome.storage.onChanged, which reaches every open tab and
+// every frame — no "tabs" permission, and no errors when a tab has no content
+// script (chrome:// pages, the Web Store, PDFs).
 
-// Load current state
-chrome.storage.sync.get(['extensionEnabled'], (result) => {
-  const isEnabled = result.extensionEnabled !== false;
-  updateToggleState(isEnabled);
+const switches = {
+  enabled: { node: document.getElementById('enabled'), fallback: true },
+  requireShift: { node: document.getElementById('requireShift'), fallback: false },
+};
+
+function paint(key, value) {
+  switches[key].node.setAttribute('aria-checked', String(value));
+}
+
+chrome.storage.sync.get(['enabled', 'requireShift'], (stored) => {
+  for (const [key, { fallback }] of Object.entries(switches)) {
+    const value = typeof stored[key] === 'boolean' ? stored[key] : fallback;
+    paint(key, value);
+  }
 });
 
-// Handle toggle click
-toggleSwitch.addEventListener('click', () => {
-  const isCurrentlyActive = toggleSwitch.classList.contains('active');
-  const newState = !isCurrentlyActive;
-  
-  updateToggleState(newState);
-  
-  // Save state
-  chrome.storage.sync.set({ extensionEnabled: newState });
-  
-  // Send message to content script
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    chrome.tabs.sendMessage(tabs[0].id, {
-      action: 'toggleExtension',
-      enabled: newState
-    });
+for (const [key, { node }] of Object.entries(switches)) {
+  node.addEventListener('click', () => {
+    const next = node.getAttribute('aria-checked') !== 'true';
+    paint(key, next);
+    chrome.storage.sync.set({ [key]: next });
+  });
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'sync') return;
+  for (const key of Object.keys(switches)) {
+    if (changes[key]) paint(key, changes[key].newValue !== false);
+  }
+});
+
+const clearButton = document.getElementById('clearCache');
+clearButton.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'feham:clearCache' }, () => {
+    void chrome.runtime.lastError; // the worker may have been asleep; harmless
+    clearButton.textContent = 'Cache cleared';
+    setTimeout(() => {
+      clearButton.textContent = 'Clear cached translations';
+    }, 1400);
   });
 });
-
-function updateToggleState(isEnabled) {
-  if (isEnabled) {
-    toggleSwitch.classList.add('active');
-  } else {
-    toggleSwitch.classList.remove('active');
-  }
-}

@@ -1,727 +1,652 @@
-// Hover-Based Urdu Dictionary Content Script
-console.log('🚀 Hover-Based Urdu Dictionary loaded');
+// Feham — hover-to-translate Urdu content script.
+//
+// Design notes:
+//  * All UI lives inside a shadow root so page CSS can't restyle it and our CSS
+//    can't leak into the page.
+//  * The word highlight is drawn as overlay rectangles, never by wrapping the
+//    text in a <span>. The old version called range.surroundContents() on every
+//    hover, which mutates the page DOM — that breaks React/Vue re-renders, kills
+//    the user's own selection, and can loop on mousemove.
+//  * Network calls go through the service worker (see background.js).
 
-let isExtensionEnabled = true;
-let currentTooltip = null;
-let currentWord = '';
-let lastMousePos = { x: 0, y: 0 };
-let currentHighlight = null;
-let isProcessing = false;
+(() => {
+  if (window.__fehamInjected) return;
+  window.__fehamInjected = true;
 
-let currentWordData = null; // Store current word data for detailed view
+  const HOVER_DELAY_MS = 130;
+  const MAX_WORD_LEN = 40;
 
-// Urdu Unicode range
-const URDU_REGEX = /[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]+/;
+  const settings = { enabled: true, requireShift: false };
 
-// Helper function to safely get numeric value
-function safeNumber(value, fallback = 0) {
-  return (typeof value === 'number' && !isNaN(value)) ? value : fallback;
-}
+  let host = null;
+  let shadow = null;
+  let tooltip = null;
+  let highlightLayer = null;
+  let detailLayer = null;
 
-// Initialize extension
-chrome.storage.sync.get(['extensionEnabled'], (result) => {
-  isExtensionEnabled = result.extensionEnabled !== false;
-  console.log('Extension enabled:', isExtensionEnabled);
-  if (isExtensionEnabled) {
-    setupEventListeners();
+  let listening = false;
+  let hoverTimer = null;
+  let requestId = 0;
+  let currentWord = '';
+  let currentEntry = null;
+  let lastPointer = { x: 0, y: 0 };
+
+  // -------------------------------------------------------------------------
+  // Urdu text helpers
+  // -------------------------------------------------------------------------
+
+  // Arabic-script blocks used by Urdu. ZWNJ/ZWJ (200C/200D) are word characters
+  // here because they appear *inside* Urdu words, not between them.
+  const ARABIC_SCRIPT =
+    /[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿‌‍]/;
+  // Punctuation that should terminate a word: ، ؛ ؟ ۔ ٪ etc.
+  const ARABIC_PUNCT =
+    /[؀-؅،-؏؛؞؟٪-٭۔۝۞۩۽۾]/;
+  // Letters only — used to decide "is this actually a word worth looking up",
+  // so bare digits or stray diacritics don't trigger a lookup.
+  const ARABIC_LETTER =
+    /[ؠ-يٮ-ۓەۥۦۮۯۺ-ۼۿݐ-ݿࢠ-ࢿﭐ-﷿ﹰ-﻿]/;
+
+  const isWordChar = (ch) => ARABIC_SCRIPT.test(ch) && !ARABIC_PUNCT.test(ch);
+  const hasUrduLetter = (text) => ARABIC_LETTER.test(text);
+
+  function isEditable(node) {
+    if (!node) return false;
+    const tag = node.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    return typeof node.closest === 'function' && !!node.closest('[contenteditable=""], [contenteditable="true"]');
   }
-});
 
-// Listen for extension toggle
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'toggleExtension') {
-    isExtensionEnabled = request.enabled;
-    console.log('Extension toggled:', isExtensionEnabled);
-    if (isExtensionEnabled) {
-      setupEventListeners();
-    } else {
-      removeEventListeners();
-      hideTooltip();
-      removeHighlight();
+  // -------------------------------------------------------------------------
+  // Finding the word under the cursor
+  // -------------------------------------------------------------------------
+
+  function caretAt(x, y) {
+    if (document.caretRangeFromPoint) {
+      const range = document.caretRangeFromPoint(x, y);
+      if (range) return { node: range.startContainer, offset: range.startOffset };
     }
-  }
-});
-
-function setupEventListeners() {
-  console.log('Setting up hover event listeners...');
-  document.addEventListener('mousemove', handleMouseMove, true);
-  document.addEventListener('keydown', handleKeyDown, true);
-  console.log('Hover event listeners added');
-}
-
-function removeEventListeners() {
-  console.log('Removing hover event listeners...');
-  document.removeEventListener('mousemove', handleMouseMove, true);
-  document.removeEventListener('keydown', handleKeyDown, true);
-}
-
-// Debounce function to limit lookups
-let mouseTimeout;
-function handleMouseMove(event) {
-  if (!isExtensionEnabled || isProcessing) return;
-  
-  lastMousePos = { x: event.clientX, y: event.clientY };
-  
-  // Debounce to avoid excessive lookups
-  clearTimeout(mouseTimeout);
-  mouseTimeout = setTimeout(() => {
-    processHover(event);
-  }, 100);
-}
-
-function processHover(event) {
-  // Don't process if hovering over our own tooltip
-  if (event.target && (
-      event.target.id === 'urdu-hover-tooltip' || 
-      event.target.closest('#urdu-hover-tooltip')
-  )) {
-    return;
-  }
-  
-  const wordData = getWordAtPoint(event.clientX, event.clientY);
-  
-  if (!wordData || !wordData.word || !wordData.isOverText) {
-    hideTooltip();
-    removeHighlight();
-    currentWord = '';
-    return;
-  }
-  
-  const word = wordData.word;
-  
-  // Check if word contains Urdu
-  if (!URDU_REGEX.test(word)) {
-    hideTooltip();
-    removeHighlight();
-    currentWord = '';
-    return;
-  }
-  
-  // Only lookup if it's a different word
-  if (word !== currentWord) {
-    currentWord = word;
-    console.log('🔍 Hovering over Urdu word:', word);
-    
-    // Highlight the word
-    highlightWord(wordData.range);
-    
-    const position = {
-      clientX: event.clientX,
-      clientY: event.clientY + 20
-    };
-    
-    showTooltip(position, word, 'Looking up...');
-    lookupWord(word);
-  }
-}
-
-function getWordAtPoint(x, y) {
-  let range = null;
-  
-  // Try different methods to get text at point
-  if (document.caretRangeFromPoint) {
-    range = document.caretRangeFromPoint(x, y);
-  } else if (document.caretPositionFromPoint) {
-    const position = document.caretPositionFromPoint(x, y);
-    if (position) {
-      range = document.createRange();
-      range.setStart(position.offsetNode, position.offset);
-      range.setEnd(position.offsetNode, position.offset);
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(x, y);
+      if (pos) return { node: pos.offsetNode, offset: pos.offset };
     }
-  }
-  
-  if (!range || !range.startContainer) {
     return null;
   }
-  
-  // Handle different node types
-  let textNode = range.startContainer;
-  let clickOffset = range.startOffset;
-  
-  // If we're in an element node, we need to find the actual text node
-  if (textNode.nodeType === Node.ELEMENT_NODE) {
-    // Get the element under cursor
-    const element = document.elementFromPoint(x, y);
-    if (!element) return null;
-    
-    // Find all text nodes in this element
-    const textNodes = [];
-    const walker = document.createTreeWalker(
-      element,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode: function(node) {
-          // Only accept text nodes with actual content
-          if (node.textContent.trim().length > 0) {
-            return NodeFilter.FILTER_ACCEPT;
-          }
-          return NodeFilter.FILTER_REJECT;
-        }
-      },
-      false
-    );
-    
-    let node;
-    while (node = walker.nextNode()) {
-      textNodes.push(node);
-    }
-    
-    if (textNodes.length === 0) return null;
-    
-    // Find which text node the cursor is actually over
-    let foundNode = null;
-    let foundOffset = 0;
-    
-    for (const node of textNodes) {
-      const nodeRange = document.createRange();
-      nodeRange.selectNodeContents(node);
-      const rects = nodeRange.getClientRects();
-      
-      // Check if cursor is within any of this node's rectangles
-      for (let i = 0; i < rects.length; i++) {
-        const rect = rects[i];
-        if (x >= rect.left && x <= rect.right &&
-            y >= rect.top && y <= rect.bottom) {
-          foundNode = node;
-          
-          // Calculate offset within this text node
-          const text = node.textContent;
-          const nodeRect = rect;
-          
-          // For RTL text (Urdu), calculate from right to left
-          if (nodeRect.width > 0 && text.length > 0) {
-            const relativeX = x - nodeRect.left;
-            const charWidth = nodeRect.width / text.length;
-            foundOffset = Math.floor(relativeX / charWidth);
-            foundOffset = Math.max(0, Math.min(foundOffset, text.length));
-          }
-          
-          break;
-        }
-      }
-      
-      if (foundNode) break;
-    }
-    
-    if (!foundNode) {
-      return null;
-    }
-    
-    textNode = foundNode;
-    clickOffset = foundOffset;
-  }
-  
-  // Now we should have a text node
-  if (textNode.nodeType !== Node.TEXT_NODE) {
-    return null;
-  }
-  
-  const text = textNode.textContent;
-  
-  // Check if we're actually over text (not whitespace)
-  if (!text || text.trim().length === 0) {
-    return null;
-  }
-  
-  // Check if the exact character at cursor position is whitespace
-  if (clickOffset < text.length) {
-    const charAtCursor = text.charAt(clickOffset);
-    const charBefore = clickOffset > 0 ? text.charAt(clickOffset - 1) : '';
-    
-    // If both the character at cursor and before are whitespace, we're in empty space
-    if (/\s/.test(charAtCursor) && /\s/.test(charBefore)) {
-      return null;
-    }
-  }
-  
-  // Word boundary regex - includes spaces, punctuation, and Urdu punctuation
-  const wordBoundary = /[\s\u060C\u061B\u061F\u066A\u066B\u066C.,!?;:()\[\]{}"""''`\n\r\t]/;
-  
-  // Find start of word (search backwards from click position)
-  let start = clickOffset;
-  while (start > 0 && !wordBoundary.test(text.charAt(start - 1))) {
-    start--;
-  }
-  
-  // Find end of word (search forwards from click position)
-  let end = clickOffset;
-  while (end < text.length && !wordBoundary.test(text.charAt(end))) {
-    end++;
-  }
-  
-  // Handle edge case: if we're exactly on a boundary, try the word before
-  if (start === end && clickOffset > 0 && !wordBoundary.test(text.charAt(clickOffset - 1))) {
-    end = clickOffset;
-    start = clickOffset - 1;
-    while (start > 0 && !wordBoundary.test(text.charAt(start - 1))) {
-      start--;
-    }
-  }
-  
-  const word = text.slice(start, end).trim();
-  
-  if (word.length === 0) {
-    return null;
-  }
-  
-  // Verify we're actually over the word by checking bounding boxes
-  let isOverText = false;
-  try {
-    const wordRange = document.createRange();
-    wordRange.setStart(textNode, start);
-    wordRange.setEnd(textNode, end);
-    
-    const rects = wordRange.getClientRects();
-    for (let i = 0; i < rects.length; i++) {
-      const rect = rects[i];
-      if (x >= rect.left - 5 && x <= rect.right + 5 &&
-          y >= rect.top - 5 && y <= rect.bottom + 5) {
-        isOverText = true;
-        break;
-      }
-    }
-    
-    if (!isOverText) {
-      return null;
-    }
-    
-    return {
-      word: word,
-      range: wordRange,
-      isOverText: true
-    };
-  } catch (error) {
-    console.error('Error creating word range:', error);
-    return null;
-  }
-}
 
-function highlightWord(range) {
-  // Remove previous highlight
-  removeHighlight();
-  
-  if (!range) return;
-  
-  try {
-    // Clone the range to avoid modifying the original
-    const highlightRange = range.cloneRange();
-    
-    // Create highlight span
-    const highlight = document.createElement('span');
-    highlight.id = 'urdu-word-highlight';
-    highlight.style.cssText = `
-      background-color: rgba(251, 191, 36, 0.35) !important;
-      border-bottom: 2px solid rgba(251, 191, 36, 0.8) !important;
-      border-radius: 3px !important;
-      padding: 2px 0 !important;
-      box-decoration-break: clone !important;
-      -webkit-box-decoration-break: clone !important;
-      transition: background-color 0.15s ease !important;
-    `;
-    
-    // Wrap the word with highlight
-    highlightRange.surroundContents(highlight);
-    currentHighlight = highlight;
-  } catch (error) {
-    // Fallback: use Selection API for visual feedback if surroundContents fails
-    console.log('Using fallback highlight method');
+  function wordAtPoint(x, y) {
+    const caret = caretAt(x, y);
+    if (!caret || !caret.node || caret.node.nodeType !== Node.TEXT_NODE) return null;
+
+    const textNode = caret.node;
+    const text = textNode.textContent || '';
+    if (!text.trim()) return null;
+
+    // The caret snaps to the nearest position, so it can land just past the end
+    // of a word. Prefer the character under the cursor, then the one before it.
+    let index = Math.min(caret.offset, text.length - 1);
+    if (!isWordChar(text.charAt(index)) && caret.offset > 0 && isWordChar(text.charAt(caret.offset - 1))) {
+      index = caret.offset - 1;
+    }
+    if (index < 0 || !isWordChar(text.charAt(index))) return null;
+
+    let start = index;
+    while (start > 0 && isWordChar(text.charAt(start - 1))) start--;
+    let end = index + 1;
+    while (end < text.length && isWordChar(text.charAt(end))) end++;
+
+    const word = text.slice(start, end).trim();
+    if (!word || word.length > MAX_WORD_LEN || !hasUrduLetter(word)) return null;
+
+    const range = document.createRange();
+    range.setStart(textNode, start);
+    range.setEnd(textNode, end);
+
+    // caretRangeFromPoint returns a position even when the pointer is in the
+    // page margin next to the text, so confirm we're really over the glyphs.
+    const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
+    const over = rects.some((r) => x >= r.left - 2 && x <= r.right + 2 && y >= r.top - 2 && y <= r.bottom + 2);
+    if (!over) return null;
+
+    return { word, rects };
+  }
+
+  // -------------------------------------------------------------------------
+  // Shadow-root UI
+  // -------------------------------------------------------------------------
+
+  function ensureUI() {
+    if (host && host.isConnected) return;
+
+    host = document.createElement('feham-root');
+    host.style.cssText = 'all: initial; position: fixed; top: 0; left: 0; width: 0; height: 0; z-index: 2147483647;';
+    shadow = host.attachShadow({ mode: 'open' });
+
+    let fontUrl = '';
     try {
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range.cloneRange());
-      currentHighlight = { isSelection: true };
-    } catch (selError) {
-      console.error('Both highlight methods failed:', error, selError);
+      fontUrl = chrome.runtime.getURL('fonts/NotoNastaliqUrdu.woff2');
+    } catch (_) {
+      /* extension context gone; fall back to system fonts */
     }
-  }
-}
 
-function removeHighlight() {
-  if (!currentHighlight) return;
-  
-  try {
-    if (currentHighlight.isSelection) {
-      // Clear selection
-      const selection = window.getSelection();
-      if (selection) {
-        selection.removeAllRanges();
+    const style = document.createElement('style');
+    style.textContent = `
+      ${fontUrl ? `@font-face {
+        font-family: 'Feham Nastaliq';
+        src: url('${fontUrl}') format('woff2');
+        font-display: swap;
+      }` : ''}
+
+      :host { all: initial; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      .layer { position: fixed; inset: 0; pointer-events: none; }
+
+      .rect {
+        position: fixed;
+        background: rgba(251, 191, 36, 0.28);
+        border-bottom: 2px solid rgba(217, 119, 6, 0.85);
+        border-radius: 3px;
+        pointer-events: none;
       }
-    } else if (currentHighlight.parentNode) {
-      // Unwrap the highlight span and preserve the text
-      const parent = currentHighlight.parentNode;
-      const textContent = currentHighlight.textContent;
-      const textNode = document.createTextNode(textContent);
-      parent.replaceChild(textNode, currentHighlight);
-      
-      // Normalize to merge text nodes
-      parent.normalize();
-    }
-  } catch (error) {
-    console.error('Error removing highlight:', error);
-  }
-  
-  currentHighlight = null;
-}
 
-function handleKeyDown(event) {
-  // Copy current word with 'C' key (not Ctrl+C)
-  if ((event.key === 'c' || event.key === 'C') && currentWord && currentTooltip) {
-    if (!event.ctrlKey && !event.metaKey) {
-      event.preventDefault();
-      copyToClipboard(currentWord);
-      showCopyFeedback();
-    }
-  }
-  
-  // Hide tooltip on Escape
-  if (event.key === 'Escape') {
-    hideTooltip();
-    removeHighlight();
-    currentWord = '';
-  }
-}
-
-function showTooltip(position, word, definition) {
-  // Remove existing tooltip
-  hideTooltip();
-  
-  // Validate position
-  if (!position || typeof position !== 'object') {
-    position = { clientX: lastMousePos.x, clientY: lastMousePos.y };
-  }
-  
-  position.clientX = Math.max(0, Math.min(safeNumber(position.clientX), window.innerWidth));
-  position.clientY = Math.max(0, Math.min(safeNumber(position.clientY), window.innerHeight));
-  
-  // Create tooltip element
-  currentTooltip = document.createElement('div');
-  currentTooltip.id = 'urdu-hover-tooltip';
-  
-  const topPos = Math.round(safeNumber(position.clientY));
-  const leftPos = Math.round(safeNumber(position.clientX));
-  
-  currentTooltip.style.cssText = `
-    position: fixed !important;
-    top: ${topPos}px !important;
-    left: ${leftPos}px !important;
-    transform: translateX(-50%) !important;
-    z-index: 2147483647 !important;
-    background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%) !important;
-    color: #1e293b !important;
-    border: 2px solid #f59e0b !important;
-    border-radius: 10px !important;
-    padding: 12px 14px !important;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif !important;
-    font-size: 13px !important;
-    min-width: 180px !important;
-    max-width: 280px !important;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(245, 158, 11, 0.1) inset !important;
-    pointer-events: none !important;
-    display: block !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-    animation: tooltipFadeIn 0.18s cubic-bezier(0.16, 1, 0.3, 1) !important;
-  `;
-  
-  currentTooltip.innerHTML = `
-    <div style="color: #d97706; font-weight: 600; margin-bottom: 8px; font-size: 20px; direction: rtl; text-align: right; letter-spacing: 0.3px; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; line-height: 1.8;">${word}</div>
-    <div id="word-type-text" style="color: #f59e0b; font-size: 10px; font-style: italic; margin-bottom: 6px; display: none;"></div>
-    <div style="color: #475569; margin-bottom: 6px; line-height: 1.5; font-size: 12px;" id="definition-text">${definition}</div>
-    <div id="synonyms-text" style="color: #6366f1; font-size: 11px; margin-bottom: 6px; line-height: 1.4; display: none;"></div>
-    <div id="urdu-meaning-text" style="color: #059669; line-height: 1.7; font-size: 13px; direction: rtl; text-align: right; font-family: 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif !important; display: none; border-top: 1px solid #e2e8f0; padding-top: 6px; margin-top: 6px;"></div>
-    <div style="color: #94a3b8; font-size: 9px; border-top: 1px solid #e2e8f0; padding-top: 5px; margin-top: 8px; text-align: center; font-weight: 500;">
-      Press 'C' to copy • ESC to close
-    </div>
-  `;
-  
-  // Add animation styles and Nastaliq font
-  if (!document.getElementById('urdu-dictionary-styles')) {
-    const styleSheet = document.createElement('style');
-    styleSheet.id = 'urdu-dictionary-styles';
-    styleSheet.textContent = `
-      @import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
-      
-      @font-face {
-        font-family: 'Noto Nastaliq Urdu';
-        font-style: normal;
-        font-weight: 400;
-        src: url(https://fonts.gstatic.com/s/notonastaliqurdu/v20/LhWNMUPbN-oZdNFcBy1-DJYsEoTq5pudQ9L940pGPkB3Qt_-DK2f3rQ.woff2) format('woff2');
+      .card {
+        position: fixed;
+        max-width: 340px;
+        min-width: 190px;
+        background: #ffffff;
+        color: #1e293b;
+        border: 1px solid #e2e8f0;
+        border-top: 3px solid #f59e0b;
+        border-radius: 10px;
+        padding: 12px 14px;
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity .12s ease;
       }
-      
-      @keyframes tooltipFadeIn {
-        from { 
-          opacity: 0; 
-          transform: translateX(-50%) translateY(-6px) scale(0.97); 
-        }
-        to { 
-          opacity: 1; 
-          transform: translateX(-50%) translateY(0) scale(1); 
-        }
+      .card.visible { opacity: 1; }
+
+      .urdu {
+        font-family: 'Feham Nastaliq', 'Noto Nastaliq Urdu', 'Jameel Noori Nastaleeq', serif;
+        direction: rtl;
+        text-align: right;
+        line-height: 2.1;
+      }
+
+      .head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+      .word { font-size: 21px; color: #b45309; font-weight: 600; }
+      .roman { font-size: 11px; color: #64748b; font-style: italic; white-space: nowrap; }
+
+      .main { font-size: 15px; font-weight: 600; color: #0f172a; margin-top: 4px; }
+      .status { font-size: 12px; color: #64748b; margin-top: 4px; }
+      .error { font-size: 12px; color: #b91c1c; margin-top: 4px; }
+
+      .senses { margin-top: 8px; display: grid; gap: 4px; }
+      .sense { font-size: 12px; color: #334155; }
+      .pos {
+        display: inline-block;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: .5px;
+        color: #92400e;
+        background: #fef3c7;
+        border-radius: 4px;
+        padding: 1px 5px;
+        margin-inline-end: 6px;
+      }
+      .alts { margin-top: 8px; font-size: 12px; color: #475569; }
+      .alts b { color: #64748b; font-weight: 600; }
+
+      .foot {
+        margin-top: 10px;
+        padding-top: 7px;
+        border-top: 1px solid #f1f5f9;
+        font-size: 10px;
+        color: #94a3b8;
+        text-align: center;
+      }
+      .foot.ok { color: #059669; font-weight: 600; }
+
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.45);
+        pointer-events: auto;
+      }
+      .detail {
+        position: fixed;
+        top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        width: min(420px, calc(100vw - 40px));
+        max-height: calc(100vh - 60px);
+        overflow-y: auto;
+        background: #ffffff;
+        color: #1e293b;
+        border-radius: 14px;
+        border-top: 4px solid #f59e0b;
+        padding: 22px;
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+        box-shadow: 0 24px 60px rgba(15, 23, 42, .35);
+        pointer-events: auto;
+      }
+      .detail .word { font-size: 30px; display: block; text-align: center; }
+      .detail .roman { display: block; text-align: center; margin-top: 2px; }
+      .detail .main { text-align: center; font-size: 17px; margin-top: 6px; }
+      .group { margin-top: 16px; padding-top: 14px; border-top: 1px solid #f1f5f9; }
+      .group h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: #92400e; margin-bottom: 6px; }
+      .row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
+      .row .back { color: #059669; font-size: 15px; }
+      .close {
+        margin-top: 18px;
+        width: 100%;
+        padding: 9px;
+        border: 0;
+        border-radius: 8px;
+        background: #f59e0b;
+        color: #fff;
+        font: 600 13px/1 inherit;
+        cursor: pointer;
+      }
+      .close:hover { background: #d97706; }
+
+      @media (prefers-reduced-motion: reduce) {
+        .card { transition: none; }
       }
     `;
-    document.head.appendChild(styleSheet);
+
+    highlightLayer = document.createElement('div');
+    highlightLayer.className = 'layer';
+
+    detailLayer = document.createElement('div');
+    detailLayer.className = 'layer';
+    detailLayer.style.display = 'none';
+
+    tooltip = document.createElement('div');
+    tooltip.className = 'card';
+    tooltip.style.display = 'none';
+
+    shadow.append(style, highlightLayer, tooltip, detailLayer);
+    (document.body || document.documentElement).appendChild(host);
   }
-  
-  document.body.appendChild(currentTooltip);
-  
-  // Adjust position if off-screen
-  requestAnimationFrame(() => {
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text; // never innerHTML: this is page-controlled text
+    return node;
+  }
+
+  // -------------------------------------------------------------------------
+  // Highlight
+  // -------------------------------------------------------------------------
+
+  function drawHighlight(rects) {
+    clearHighlight();
+    for (const r of rects) {
+      const box = el('div', 'rect');
+      box.style.left = `${r.left}px`;
+      box.style.top = `${r.top}px`;
+      box.style.width = `${r.width}px`;
+      box.style.height = `${r.height}px`;
+      highlightLayer.appendChild(box);
+    }
+  }
+
+  function clearHighlight() {
+    if (highlightLayer) highlightLayer.replaceChildren();
+  }
+
+  // -------------------------------------------------------------------------
+  // Tooltip
+  // -------------------------------------------------------------------------
+
+  function renderTooltip(word, entry, state) {
+    if (!tooltip) return; // a late response after teardown
+    tooltip.replaceChildren();
+
+    const head = el('div', 'head');
+    head.append(el('span', 'word urdu', word));
+    if (entry?.roman) head.append(el('span', 'roman', entry.roman));
+    tooltip.append(head);
+
+    if (state === 'loading') {
+      tooltip.append(el('div', 'status', 'Looking up…'));
+    } else if (state === 'error') {
+      tooltip.append(el('div', 'error', entry));
+    } else if (entry) {
+      const primary = entry.primary || entry.translation;
+      if (primary) tooltip.append(el('div', 'main', primary));
+
+      if (entry.empty) tooltip.append(el('div', 'status', 'No translation found'));
+
+      if (entry.dict.length) {
+        const senses = el('div', 'senses');
+        for (const group of entry.dict.slice(0, 4)) {
+          const line = el('div', 'sense');
+          if (group.pos) line.append(el('span', 'pos', group.pos));
+          line.append(document.createTextNode(group.terms.slice(0, 5).join(', ')));
+          senses.append(line);
+        }
+        tooltip.append(senses);
+      }
+
+      if (entry.alts.length) {
+        const alts = el('div', 'alts');
+        alts.append(el('b', null, 'also: '));
+        alts.append(document.createTextNode(entry.alts.slice(0, 4).join(' · ')));
+        tooltip.append(alts);
+      }
+    }
+
+    const foot = el('div', 'foot', "C copy · K details · Esc close");
+    tooltip.append(foot);
+  }
+
+  function positionTooltip() {
+    if (!tooltip) return;
+    const margin = 12;
+    tooltip.style.left = '0px';
+    tooltip.style.top = '0px';
+    tooltip.style.display = 'block';
+
+    const rect = tooltip.getBoundingClientRect();
+    let left = lastPointer.x + 16;
+    let top = lastPointer.y + 20;
+
+    if (left + rect.width > window.innerWidth - margin) left = lastPointer.x - rect.width - 16;
+    if (left < margin) left = margin;
+    if (top + rect.height > window.innerHeight - margin) top = lastPointer.y - rect.height - 16;
+    if (top < margin) top = margin;
+
+    tooltip.style.left = `${Math.round(left)}px`;
+    tooltip.style.top = `${Math.round(top)}px`;
+    tooltip.classList.add('visible');
+  }
+
+  function hideTooltip() {
+    if (tooltip) {
+      tooltip.style.display = 'none';
+      tooltip.classList.remove('visible');
+    }
+    clearHighlight();
+    currentWord = '';
+    currentEntry = null;
+    requestId++; // invalidate any in-flight response
+  }
+
+  // -------------------------------------------------------------------------
+  // Detail panel
+  // -------------------------------------------------------------------------
+
+  function showDetail() {
+    if (!currentEntry || !currentWord) return;
+
+    detailLayer.replaceChildren();
+    detailLayer.style.display = 'block';
+
+    const backdrop = el('div', 'backdrop');
+    backdrop.addEventListener('click', hideDetail);
+
+    const panel = el('div', 'detail');
+    panel.append(el('span', 'word urdu', currentWord));
+    if (currentEntry.roman) panel.append(el('span', 'roman', currentEntry.roman));
+    const headline = currentEntry.primary || currentEntry.translation;
+    if (headline) panel.append(el('div', 'main', headline));
+
+    for (const group of currentEntry.dict) {
+      const section = el('div', 'group');
+      section.append(el('h4', null, group.pos || 'meanings'));
+      const senses = group.senses.length
+        ? group.senses
+        : group.terms.map((term) => ({ gloss: term, back: [] }));
+      for (const sense of senses) {
+        const row = el('div', 'row');
+        row.append(el('span', null, sense.gloss));
+        if (sense.back.length) row.append(el('span', 'back urdu', sense.back.join('، ')));
+        section.append(row);
+      }
+      panel.append(section);
+    }
+
+    if (currentEntry.alts.length) {
+      const section = el('div', 'group');
+      section.append(el('h4', null, 'other renderings'));
+      for (const alt of currentEntry.alts) section.append(el('div', 'row', alt));
+      panel.append(section);
+    }
+
+    if (currentEntry.suggestion) {
+      const section = el('div', 'group');
+      section.append(el('h4', null, 'did you mean'));
+      section.append(el('div', 'row urdu', currentEntry.suggestion));
+      panel.append(section);
+    }
+
+    const close = el('button', 'close', 'Close');
+    close.addEventListener('click', hideDetail);
+    panel.append(close);
+
+    detailLayer.append(backdrop, panel);
+  }
+
+  function hideDetail() {
+    if (!detailLayer) return;
+    detailLayer.replaceChildren();
+    detailLayer.style.display = 'none';
+  }
+
+  const detailOpen = () => detailLayer && detailLayer.style.display === 'block';
+
+  // -------------------------------------------------------------------------
+  // Lookup
+  // -------------------------------------------------------------------------
+
+  function lookup(word) {
+    const id = ++requestId;
+    let response;
     try {
-      if (currentTooltip && document.body.contains(currentTooltip)) {
-        const rect = currentTooltip.getBoundingClientRect();
-        
-        // Adjust horizontal position
-        if (rect.left < 10) {
-          currentTooltip.style.left = (rect.width / 2 + 10) + 'px';
-          currentTooltip.style.transform = 'none';
-        } else if (rect.right > window.innerWidth - 10) {
-          currentTooltip.style.left = (window.innerWidth - rect.width / 2 - 10) + 'px';
-          currentTooltip.style.transform = 'none';
+      response = chrome.runtime.sendMessage({ type: 'feham:lookup', word });
+    } catch (err) {
+      teardownIfOrphaned(err);
+      return;
+    }
+
+    Promise.resolve(response)
+      .then((result) => {
+        if (id !== requestId || currentWord !== word) return; // user moved on
+        if (!result) {
+          renderTooltip(word, 'No response from the extension — try reloading it', 'error');
+          positionTooltip();
+          return;
         }
-        
-        // Adjust vertical position (show above if too close to bottom)
-        if (rect.bottom > window.innerHeight - 10) {
-          const newTop = Math.max(10, topPos - rect.height - 40);
-          currentTooltip.style.top = newTop + 'px';
+        if (result.ok) {
+          currentEntry = result.entry;
+          renderTooltip(word, result.entry, 'ready');
+        } else {
+          currentEntry = null;
+          renderTooltip(word, result.error || 'Lookup failed', 'error');
         }
-      }
-    } catch (error) {
-      console.error('Error adjusting tooltip position:', error);
-    }
-  });
-}
-
-function hideTooltip() {
-  if (currentTooltip) {
-    try {
-      currentTooltip.remove();
-    } catch (error) {
-      console.error('Error removing tooltip:', error);
-    }
-    currentTooltip = null;
-  }
-}
-
-function lookupWord(word) {
-  console.log('📖 Looking up word:', word);
-  isProcessing = true;
-  
-  // Get English translation
-  translateWord(word);
-}
-
-function translateWord(word) {
-  if (!navigator.onLine) {
-    updateDefinition('⚠️ You are currently offline');
-    isProcessing = false;
-    return;
-  }
-  
-  // Request multiple data types: t=translation, bd=dictionary, ss=synonyms
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=ur&tl=en&dt=t&dt=bd&dt=ss&q=${encodeURIComponent(word)}`;
-  
-  fetch(url)
-    .then(response => {
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return response.json();
-    })
-    .then(data => {
-      console.log('Google Translate response:', data);
-      
-      let translation = '';
-      let wordType = '';
-      let synonyms = [];
-      
-      // Get translation (index 0)
-      if (data && data[0] && Array.isArray(data[0])) {
-        translation = data[0]
-          .filter(item => item && item[0])
-          .map(item => item[0])
-          .join('');
-      }
-      
-      // Get word type and synonyms from dictionary data (index 1)
-      if (data && data[1] && Array.isArray(data[1])) {
-        // data[1] contains dictionary entries with word types
-        for (const entry of data[1]) {
-          if (entry && entry[0]) {
-            wordType = entry[0]; // noun, verb, adjective, etc.
-            
-            // Get synonyms from this entry
-            if (entry[1] && Array.isArray(entry[1])) {
-              synonyms = entry[1]
-                .slice(0, 3) // Take first 3 synonyms
-                .map(item => item[0])
-                .filter(s => s && s.length > 0);
-            }
-            break; // Use first entry
-          }
-        }
-      }
-      
-      // Get additional synonyms (index 11)
-      if (data && data[11] && Array.isArray(data[11])) {
-        const moreSynonyms = data[11]
-          .flat()
-          .filter(item => typeof item === 'string' && item.length > 0)
-          .slice(0, 3);
-        
-        synonyms = [...new Set([...synonyms, ...moreSynonyms])].slice(0, 3);
-      }
-      
-      // Update UI
-      if (translation && translation.trim()) {
-        updateDefinition(translation.trim());
-        
-        // Show word type
-        if (wordType) {
-          updateWordType(wordType);
-        }
-        
-        // Show synonyms
-        if (synonyms.length > 0) {
-          updateSynonyms(synonyms);
-        }
-        
-        // Get Urdu meaning
-        getUrduMeaning(word, translation.trim());
-      } else {
-        updateDefinition('Translation not available');
-        isProcessing = false;
-      }
-    })
-    .catch(error => {
-      console.error('Translation error:', error);
-      updateDefinition('❌ Translation failed');
-      isProcessing = false;
-    });
-}
-
-function updateWordType(type) {
-  if (currentTooltip) {
-    const typeElement = currentTooltip.querySelector('#word-type-text');
-    if (typeElement) {
-      typeElement.textContent = type;
-      typeElement.style.display = 'block';
-    }
-  }
-}
-
-function updateSynonyms(synonyms) {
-  if (currentTooltip && synonyms.length > 0) {
-    const synElement = currentTooltip.querySelector('#synonyms-text');
-    if (synElement) {
-      synElement.textContent = '📝 ' + synonyms.join(', ');
-      synElement.style.display = 'block';
-    }
-  }
-}
-
-async function getUrduMeaning(originalWord, englishTranslation) {
-  try {
-    // Translate the English meaning back to Urdu
-    const urduUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=ur&dt=t&q=${encodeURIComponent(englishTranslation)}`;
-    
-    const urduResponse = await fetch(urduUrl);
-    if (urduResponse.ok) {
-      const urduData = await urduResponse.json();
-      if (urduData && urduData[0] && Array.isArray(urduData[0])) {
-        const urduMeaning = urduData[0]
-          .filter(item => item && item[0])
-          .map(item => item[0])
-          .join('')
-          .trim();
-        
-        // Check if Urdu meaning is different from original word
-        // Remove diacritics and spaces for comparison
-        const normalizedOriginal = originalWord.replace(/[\u064B-\u065F\u0670\s]/g, '');
-        const normalizedMeaning = urduMeaning.replace(/[\u064B-\u065F\u0670\s]/g, '');
-        
-        // Only show if they're different
-        if (urduMeaning && normalizedMeaning !== normalizedOriginal) {
-          updateUrduMeaning(urduMeaning);
-        }
-      }
-    }
-    isProcessing = false;
-  } catch (error) {
-    console.error('Error getting Urdu meaning:', error);
-    isProcessing = false;
-  }
-}
-
-function updateDefinition(definition) {
-  if (currentTooltip) {
-    const definitionElement = currentTooltip.querySelector('#definition-text');
-    if (definitionElement) {
-      definitionElement.textContent = definition;
-    }
-  }
-}
-
-function updateUrduMeaning(meaning) {
-  if (currentTooltip) {
-    const urduElement = currentTooltip.querySelector('#urdu-meaning-text');
-    if (urduElement) {
-      urduElement.textContent = meaning;
-      urduElement.style.display = 'block';
-    }
-  }
-}
-
-
-
-function copyToClipboard(text) {
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text)
-      .then(() => {
-        console.log('📋 Copied to clipboard:', text);
-        showCopyFeedback();
+        positionTooltip();
       })
-      .catch(err => {
-        console.error('Failed to copy:', err);
-        fallbackCopyToClipboard(text);
+      .catch((err) => {
+        if (teardownIfOrphaned(err)) return;
+        if (id !== requestId) return;
+        renderTooltip(word, 'Lookup failed', 'error');
+        positionTooltip();
       });
-  } else {
-    fallbackCopyToClipboard(text);
   }
-}
 
-function fallbackCopyToClipboard(text) {
-  try {
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.cssText = 'position: fixed; left: -999999px; top: -999999px;';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    
-    const successful = document.execCommand('copy');
-    document.body.removeChild(textArea);
-    
-    if (successful) {
-      showCopyFeedback();
+  // A reloaded/updated extension leaves this script running with a dead port.
+  // Detect that and remove ourselves instead of throwing on every hover.
+  function teardownIfOrphaned(err) {
+    const message = String(err?.message || err || '');
+    if (message.includes('Extension context invalidated') || !chrome.runtime?.id) {
+      disable();
+      host?.remove();
+      host = null;
+      return true;
     }
-  } catch (err) {
-    console.error('Fallback copy failed:', err);
+    return false;
   }
-}
 
-function showCopyFeedback() {
-  if (currentTooltip) {
-    const footer = currentTooltip.querySelector('div:last-child');
-    if (footer) {
-      const originalText = footer.innerHTML;
-      footer.innerHTML = '<span style="color: #10b981; font-weight: 600;">✓ Copied!</span>';
+  // -------------------------------------------------------------------------
+  // Events
+  // -------------------------------------------------------------------------
+
+  function onMouseMove(event) {
+    lastPointer = { x: event.clientX, y: event.clientY };
+    if (detailOpen()) return;
+
+    // Don't fight the user while they're dragging out a selection.
+    if (event.buttons !== 0) return;
+    if (settings.requireShift && !event.shiftKey) {
+      if (currentWord) hideTooltip();
+      return;
+    }
+
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => processHover(event.clientX, event.clientY), HOVER_DELAY_MS);
+  }
+
+  function processHover(x, y) {
+    let found = null;
+    try {
+      found = wordAtPoint(x, y);
+    } catch (_) {
+      found = null;
+    }
+
+    if (!found) {
+      if (currentWord) hideTooltip();
+      return;
+    }
+
+    // Re-create the UI if the page tore it out (SPA route changes wipe body).
+    ensureUI();
+
+    if (found.word === currentWord) {
+      drawHighlight(found.rects);
+      positionTooltip();
+      return;
+    }
+
+    currentWord = found.word;
+    currentEntry = null;
+    drawHighlight(found.rects);
+    renderTooltip(found.word, null, 'loading');
+    positionTooltip();
+    lookup(found.word);
+  }
+
+  function onKeyDown(event) {
+    if (event.key === 'Escape') {
+      if (detailOpen()) hideDetail();
+      else hideTooltip();
+      return;
+    }
+
+    if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+    // Never swallow keystrokes the page is expecting.
+    if (isEditable(event.target) || isEditable(document.activeElement)) return;
+    if (!currentWord || tooltip?.style.display === 'none') return;
+
+    const key = event.key.toLowerCase();
+    if (key === 'c') {
+      event.preventDefault();
+      copyWord(currentWord);
+    } else if (key === 'k') {
+      event.preventDefault();
+      if (currentEntry) showDetail();
+    }
+  }
+
+  function onScroll() {
+    if (!detailOpen() && currentWord) hideTooltip();
+  }
+
+  function copyWord(text) {
+    const done = () => {
+      const foot = tooltip?.querySelector('.foot');
+      if (!foot) return;
+      const original = foot.textContent;
+      foot.textContent = '✓ Copied';
+      foot.classList.add('ok');
       setTimeout(() => {
-        if (footer && currentTooltip) {
-          footer.innerHTML = originalText;
+        if (foot.isConnected) {
+          foot.textContent = original;
+          foot.classList.remove('ok');
         }
-      }, 1500);
+      }, 1200);
+    };
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text) && done());
+    } else if (fallbackCopy(text)) {
+      done();
     }
   }
-}
 
-console.log('📖 Hover-based Urdu dictionary ready!');
+  function fallbackCopy(text) {
+    if (!document.body) return false;
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.cssText = 'position:fixed;top:-9999px;opacity:0;';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      return ok;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Enable / disable
+  // -------------------------------------------------------------------------
+
+  function enable() {
+    if (listening) return;
+    listening = true;
+    document.addEventListener('mousemove', onMouseMove, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('blur', onScroll);
+  }
+
+  function disable() {
+    if (!listening) return;
+    listening = false;
+    clearTimeout(hoverTimer);
+    document.removeEventListener('mousemove', onMouseMove, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('scroll', onScroll, true);
+    window.removeEventListener('blur', onScroll);
+    hideDetail();
+    hideTooltip();
+  }
+
+  function applySettings() {
+    if (settings.enabled) enable();
+    else disable();
+  }
+
+  chrome.storage.sync.get(['enabled', 'requireShift'], (stored) => {
+    if (chrome.runtime.lastError) return;
+    settings.enabled = stored.enabled !== false;
+    settings.requireShift = stored.requireShift === true;
+    applySettings();
+  });
+
+  // The popup writes to storage rather than messaging tabs: storage events reach
+  // every tab and every frame with no tabs permission and no dead-port errors.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'sync') return;
+    if (changes.enabled) settings.enabled = changes.enabled.newValue !== false;
+    if (changes.requireShift) settings.requireShift = changes.requireShift.newValue === true;
+    applySettings();
+  });
+})();

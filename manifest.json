@@ -1,43 +1,41 @@
 {
   "manifest_version": 3,
-  "name": "Urdu Translator",
-  "version": "1.0",
-  "description": "Hover over Urdu words to see English translations from Rekhta Dictionary",
-  
-  "permissions": [
-    "activeTab",
-    "storage",
-    "clipboardWrite",
-    "scripting"
-  ],
-  
-  "host_permissions": [
-    "https://translate.googleapis.com/*",
-    "https://translate.google.com/*",
-    "https://fonts.googleapis.com/*",
-    "https://fonts.gstatic.com/*"
-  ],
-  
+  "name": "Feham — Urdu Reader",
+  "version": "1.1.0",
+  "description": "Hover over any Urdu word to see its English meaning, transliteration and dictionary entry.",
+
+  "permissions": ["storage"],
+
+  "host_permissions": ["https://translate.googleapis.com/*"],
+
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_end"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
-  
+
   "background": {
     "service_worker": "background.js"
   },
-  
+
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Toggle Urdu Translator"
+    "default_title": "Feham — Urdu Reader"
   },
-  
+
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  }
+  },
+
+  "web_accessible_resources": [
+    {
+      "resources": ["fonts/NotoNastaliqUrdu.woff2"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
