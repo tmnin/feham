@@ -79,4 +79,26 @@ paragraph will get you rate-limited by Google.
 ## Permissions
 
 `storage` only, plus host access to `translate.googleapis.com`. Nothing is sent
-anywhere except the single word you hover.
+anywhere except the single word you hover — see [PRIVACY.md](PRIVACY.md).
+
+## Packaging
+
+`store/` holds the Chrome Web Store submission material: screenshots at the
+required 1280×800, plus [listing.md](store/listing.md) with the description,
+permission justifications and privacy answers ready to paste into the dashboard.
+
+To rebuild the upload package:
+
+```sh
+zip -r feham-<version>.zip manifest.json background.js content.js \
+    popup.html popup.js icons fonts
+```
+
+`store/` and the zip itself are deliberately left out of the package.
+
+## Credits
+
+Bundled fonts are [Noto Nastaliq Urdu](https://github.com/notofonts/nastaliq) and
+[Noto Naskh Arabic](https://github.com/notofonts/arabic), © The Noto Project
+Authors, used under the SIL Open Font License 1.1 — see
+[fonts/OFL.txt](fonts/OFL.txt).
