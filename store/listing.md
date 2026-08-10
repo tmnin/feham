@@ -26,12 +26,7 @@ Hover any Urdu word to see its English meaning, transliteration and dictionary e
 
 **Detailed description**
 ```
-Feham turns any webpage into a readable Urdu text. Point at a word and a small
-card shows what it means — no clicking, no copying into a translation tab, no
-losing your place in the sentence.
-
-It works the way rikaikun does for Japanese: you keep reading, and the meaning
-comes to you.
+Feham is built to help Urdu learners and speakers read text from any webpage. Point at a word and a small card shows what it means in English — no clicking, no copying into a translation tab, no losing your place in the sentence.
 
 WHAT YOU GET FOR EVERY WORD
 
@@ -54,17 +49,13 @@ BUILT FOR ACTUALLY READING URDU
 
 PRIVACY
 
-Feham sends one thing anywhere: the single word you hover, to Google Translate,
-to look up its meaning. It never sends the page, its address, or your browsing
-history. There is no analytics, no tracking, no accounts, and no server behind
-the extension. Your settings and the word cache stay on your machine, and you
-can clear the cache from the popup at any time.
+Feham sends one thing anywhere: the single word you hover, to Google Translate, to look up its meaning. It never sends the page, its address, or your browsing history. There is no analytics, no tracking, no accounts, and no server behind the extension. Your settings and the word cache stay on your machine, and you can clear the cache from the popup at any time.
 
 Full source code: https://github.com/tmnin/feham
 Privacy policy: https://github.com/tmnin/feham/blob/main/PRIVACY.md
 ```
 
-**Screenshots** (upload in this order)
+**Screenshots** (1280×800, upload in this order)
 
 | File | Shows |
 | --- | --- |
@@ -72,6 +63,29 @@ Privacy policy: https://github.com/tmnin/feham/blob/main/PRIVACY.md
 | `03-real-site.png` | Working on a real page (BBC Urdu article) |
 | `02-details.png` | The full dictionary entry panel (K) |
 | `04-settings.png` | Popup: on/off, Shift mode, Nastaliq/Naskh picker |
+
+**Graphic assets**
+
+| Field | File |
+| --- | --- |
+| Store icon (128×128) | `store-icon-128.png` |
+| Small promo tile (440×280) | `promo-small-440x280.png` |
+| Marquee promo tile (1400×560) | `promo-marquee-1400x560.png` |
+| Global promo video | leave blank |
+
+All are RGB with no alpha, as the store requires. The mark is sized from a
+measured ink bounding box rather than by eye — Nastaliq's cascade overshoots its
+em box badly, so a font-size picked by guesswork clips the top dot and the
+descender.
+
+**Additional fields**
+
+| Field | Value |
+| --- | --- |
+| Official URL | `None` — that dropdown only lists domains verified in Google Search Console |
+| Homepage URL | `https://github.com/tmnin/feham` |
+| Support URL | `https://github.com/tmnin/feham/issues` |
+| Mature content | off |
 
 ---
 
