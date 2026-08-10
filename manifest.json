@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Feham — Urdu Reader",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Hover over any Urdu word to see its English meaning, transliteration and dictionary entry.",
   "homepage_url": "https://github.com/tmnin/feham",
 

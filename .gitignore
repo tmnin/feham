@@ -2,3 +2,4 @@
 .S_Store
 node_modules/
 *.zip
+store/listing.md
